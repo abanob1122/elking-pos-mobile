@@ -346,8 +346,8 @@
       let filters = [`store_id=eq.${this.config.storeId}`, 'is_deleted=eq.false', 'is_active=eq.true'];
 
       if (branchId && branchId !== 'ALL') {
-        // إذا كان هناك أصناف مخصصة لفرع
-        filters.push(`or=(branch_id.eq.${branchId},branch_id.is.null)`);
+        // جميع الأصناف مرتبطة بفرع محدد (branch_id NOT NULL في المخطط)
+        filters.push(`branch_id=eq.${branchId}`);
       }
 
       if (search && search.trim()) {
