@@ -263,7 +263,7 @@
       } catch (_) {}
 
       // 4. نواقص المخزون (Low Stock)
-      const lowStockQuery = `/products?store_id=eq.${this.config.storeId}${branchFilter}&is_active=eq.true&is_deleted=eq.false&limit=100`;
+      const lowStockQuery = `/products?store_id=eq.${this.config.storeId}${branchFilter}&is_active=eq.true&limit=100`;
       let lowStockCount = 0;
       let lowStockItems = [];
       try {
@@ -343,7 +343,7 @@
     // المخزون والأصناف (Inventory & Products)
     // =========================================================================
     async getProducts({ branchId = 'ALL', search = '', lowStockOnly = false, limit = 100, offset = 0 } = {}) {
-      let filters = [`store_id=eq.${this.config.storeId}`, 'is_deleted=eq.false', 'is_active=eq.true'];
+      let filters = [`store_id=eq.${this.config.storeId}`, 'is_active=eq.true'];
 
       if (branchId && branchId !== 'ALL') {
         // جميع الأصناف مرتبطة بفرع محدد (branch_id NOT NULL في المخطط)

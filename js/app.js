@@ -330,8 +330,13 @@
       const branchSelect = el('branchSelect');
       if (!branchSelect) return;
 
-      const activeBranch = client.getActiveBranch();
-      let optionsHtml = `<option value="ALL">🌐 جميع الفروع</option>`;
+      let activeBranch = client.getActiveBranch();
+      const validIds = ['ALL', ...branchesCache.map(b => b.id)];
+      if (!validIds.includes(activeBranch)) {
+        activeBranch = 'ALL';
+        client.setActiveBranch('ALL');
+      }
+      let optionsHtml = `<option value="ALL" ${activeBranch === 'ALL' ? 'selected' : ''}>🌐 جميع الفروع</option>`;
 
       for (const b of branchesCache) {
         const isSelected = b.id === activeBranch ? 'selected' : '';
