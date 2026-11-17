@@ -1,0 +1,685 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <title>ELKing POS - لوحة تحكم صاحب المحل</title>
+
+  <!-- PWA & Mobile Meta Tags -->
+  <meta name="theme-color" content="#0f172a">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="ELKing POS">
+  <link rel="manifest" href="./manifest.json">
+  <link rel="icon" type="image/png" href="./icons/icon-192.png">
+  <link rel="apple-touch-icon" href="./icons/icon-192.png">
+
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            brand: {
+              50: '#eff6ff',
+              100: '#dbeafe',
+              500: '#3b82f6',
+              600: '#2563eb',
+              700: '#1d4ed8',
+              800: '#1e40af',
+              900: '#1e3a8a',
+            },
+            gold: {
+              400: '#fbbf24',
+              500: '#f59e0b',
+              600: '#d97706',
+            }
+          }
+        }
+      }
+    }
+  </script>
+
+  <!-- Lucide Icons -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+
+  <!-- Custom CSS -->
+  <link rel="stylesheet" href="./css/app.css">
+</head>
+<body class="bg-slate-100 dark:bg-slate-950 text-slate-900 dark:text-slate-100 min-h-screen flex flex-col antialiased select-none">
+
+  <!-- ===================================================================== -->
+  <!-- Top Application Header -->
+  <!-- ===================================================================== -->
+  <header class="sticky top-0 z-30 bg-white/95 dark:bg-slate-900/95 backdrop-blur border-b border-slate-200 dark:border-slate-800 shadow-sm pt-safe">
+    <div class="px-4 py-2.5 flex items-center justify-between gap-2">
+      <!-- Logo & Store Title -->
+      <div class="flex items-center gap-2">
+        <div class="w-9 h-9 rounded-xl bg-gradient-to-tr from-amber-500 to-amber-300 flex items-center justify-center text-slate-950 shadow-md shadow-amber-500/20">
+          <i data-lucide="crown" class="w-5 h-5"></i>
+        </div>
+        <div>
+          <h1 class="text-sm font-black tracking-wide flex items-center gap-1.5 text-slate-900 dark:text-white">
+            ELKing POS
+            <span class="text-[10px] bg-amber-500/10 text-amber-600 dark:text-amber-400 font-semibold px-1.5 py-0.5 rounded border border-amber-500/20">صاحب المحل</span>
+          </h1>
+          <div class="flex items-center gap-1.5 text-[11px] text-slate-500 dark:text-slate-400">
+            <span id="headerStoreName">متجر إلكينج</span>
+            <span class="inline-block w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+            <span id="cloudStatusText" class="text-emerald-600 dark:text-emerald-400 font-medium">سحابي متصل</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Branch Selector & Header Controls -->
+      <div class="flex items-center gap-1.5">
+        <!-- Branch Dropdown -->
+        <div class="relative">
+          <select id="branchSelect" class="bg-slate-100 dark:bg-slate-800 text-xs font-bold text-slate-800 dark:text-slate-200 rounded-lg px-2.5 py-1.5 border border-slate-200 dark:border-slate-700 outline-none focus:ring-2 focus:ring-blue-500">
+            <option value="ALL">🌐 جميع الفروع</option>
+          </select>
+        </div>
+
+        <!-- Refresh Button -->
+        <button id="refreshBtn" title="تحديث البيانات" class="w-8 h-8 rounded-lg bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 flex items-center justify-center text-slate-700 dark:text-slate-300 transition active:scale-95">
+          <i data-lucide="rotate-cw" class="w-4 h-4" id="refreshIcon"></i>
+        </button>
+
+        <!-- Dark / Light Mode Toggle -->
+        <button id="themeToggleBtn" title="تبديل المظهر" class="w-8 h-8 rounded-lg bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 flex items-center justify-center text-amber-500 dark:text-amber-400 transition active:scale-95">
+          <i data-lucide="moon" class="w-4 h-4 hidden dark:block"></i>
+          <i data-lucide="sun" class="w-4 h-4 block dark:hidden"></i>
+        </button>
+
+        <!-- User Profile / Logout -->
+        <button id="userProfileBtn" title="الملف الشخصي والخروج" class="w-8 h-8 rounded-lg bg-blue-50 dark:bg-blue-900/40 hover:bg-blue-100 dark:hover:bg-blue-900/60 flex items-center justify-center text-blue-600 dark:text-blue-400 transition active:scale-95">
+          <i data-lucide="user" class="w-4 h-4"></i>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <!-- ===================================================================== -->
+  <!-- Main Content Scroll Area -->
+  <!-- ===================================================================== -->
+  <main class="flex-1 overflow-y-auto px-4 py-4 pb-24 max-w-lg mx-auto w-full">
+
+    <!-- ----------------------------------------------------------------- -->
+    <!-- 1. TAB: DASHBOARD (الرئيسية)                                      -->
+    <!-- ----------------------------------------------------------------- -->
+    <section id="tab-dashboard" class="tab-content active space-y-4">
+      <!-- Live Sync Pill Banner -->
+      <div class="bg-gradient-to-r from-blue-600 to-indigo-600 rounded-2xl p-4 text-white shadow-lg shadow-blue-500/20 relative overflow-hidden">
+        <div class="relative z-10 flex items-center justify-between">
+          <div>
+            <p class="text-xs text-blue-100 font-medium">مبيعات اليوم اللحظية</p>
+            <h2 id="kpiTotalSales" class="text-2xl font-black mt-1 num-ltr">0.00 ج.م</h2>
+            <p class="text-[11px] text-blue-200 mt-1 flex items-center gap-1">
+              <i data-lucide="receipt" class="w-3.5 h-3.5"></i>
+              <span id="kpiInvoicesCount">0</span> فاتورة مكتملة اليوم
+            </p>
+          </div>
+          <div class="w-12 h-12 rounded-xl bg-white/10 backdrop-blur border border-white/20 flex items-center justify-center">
+            <i data-lucide="trending-up" class="w-6 h-6 text-amber-300"></i>
+          </div>
+        </div>
+        <!-- Decorative bg blur circles -->
+        <div class="absolute -bottom-6 -left-6 w-24 h-24 bg-white/10 rounded-full blur-xl pointer-events-none"></div>
+      </div>
+
+      <!-- Secondary KPIs Grid -->
+      <div class="grid grid-cols-2 gap-3">
+        <!-- Cash in Hand -->
+        <div class="bg-white dark:bg-slate-900 p-3.5 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm flex flex-col justify-between">
+          <div class="flex items-center justify-between text-slate-500 dark:text-slate-400">
+            <span class="text-xs font-semibold">نقدية الدرج (كاش)</span>
+            <div class="w-7 h-7 rounded-lg bg-emerald-500/10 text-emerald-500 flex items-center justify-center">
+              <i data-lucide="banknote" class="w-4 h-4"></i>
+            </div>
+          </div>
+          <div class="mt-2">
+            <span id="kpiCashInHand" class="text-lg font-black text-emerald-600 dark:text-emerald-400 num-ltr">0.00 ج.م</span>
+            <p class="text-[10px] text-slate-400 mt-0.5">بعد خصم المصروفات</p>
+          </div>
+        </div>
+
+        <!-- Total Expenses -->
+        <div class="bg-white dark:bg-slate-900 p-3.5 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm flex flex-col justify-between">
+          <div class="flex items-center justify-between text-slate-500 dark:text-slate-400">
+            <span class="text-xs font-semibold">المصروفات اليوم</span>
+            <div class="w-7 h-7 rounded-lg bg-rose-500/10 text-rose-500 flex items-center justify-center">
+              <i data-lucide="arrow-down-left" class="w-4 h-4"></i>
+            </div>
+          </div>
+          <div class="mt-2">
+            <span id="kpiTotalExpenses" class="text-lg font-black text-rose-600 dark:text-rose-400 num-ltr">0.00 ج.م</span>
+            <p class="text-[10px] text-slate-400 mt-0.5">من الخزينة والدرج</p>
+          </div>
+        </div>
+
+        <!-- Card & Digital Sales -->
+        <div class="bg-white dark:bg-slate-900 p-3.5 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm flex flex-col justify-between">
+          <div class="flex items-center justify-between text-slate-500 dark:text-slate-400">
+            <span class="text-xs font-semibold">فيزا وشبكة</span>
+            <div class="w-7 h-7 rounded-lg bg-purple-500/10 text-purple-500 flex items-center justify-center">
+              <i data-lucide="credit-card" class="w-4 h-4"></i>
+            </div>
+          </div>
+          <div class="mt-2">
+            <span id="kpiCardSales" class="text-base font-black text-purple-600 dark:text-purple-400 num-ltr">0.00 ج.م</span>
+          </div>
+        </div>
+
+        <!-- InstaPay & Wallets -->
+        <div class="bg-white dark:bg-slate-900 p-3.5 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm flex flex-col justify-between">
+          <div class="flex items-center justify-between text-slate-500 dark:text-slate-400">
+            <span class="text-xs font-semibold">انستاباي ومحافظ</span>
+            <div class="w-7 h-7 rounded-lg bg-cyan-500/10 text-cyan-500 flex items-center justify-center">
+              <i data-lucide="smartphone" class="w-4 h-4"></i>
+            </div>
+          </div>
+          <div class="mt-2">
+            <span id="kpiInstapaySales" class="text-base font-black text-cyan-600 dark:text-cyan-400 num-ltr">0.00 ج.م</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Active Shifts Section -->
+      <div class="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-4 shadow-sm space-y-3">
+        <div class="flex items-center justify-between">
+          <h3 class="text-sm font-bold flex items-center gap-1.5 text-slate-800 dark:text-slate-200">
+            <i data-lucide="clock" class="w-4 h-4 text-emerald-500"></i>
+            الورديات المفتوحة حالياً
+          </h3>
+          <span id="activeShiftsBadge" class="text-xs bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 font-bold px-2 py-0.5 rounded-full">0 جارية</span>
+        </div>
+        <div id="activeShiftsList" class="space-y-2">
+          <!-- Active shifts injected via JS -->
+          <p class="text-xs text-slate-400 text-center py-2">لا توجد ورديات مفتوحة حالياً في هذا الفرع.</p>
+        </div>
+      </div>
+
+      <!-- Low Stock Alerts Section -->
+      <div class="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-4 shadow-sm space-y-3">
+        <div class="flex items-center justify-between">
+          <h3 class="text-sm font-bold flex items-center gap-1.5 text-slate-800 dark:text-slate-200">
+            <i data-lucide="alert-triangle" class="w-4 h-4 text-amber-500"></i>
+            تنبيهات نواقص المخزون
+          </h3>
+          <button id="viewAllLowStockBtn" class="text-xs text-blue-600 dark:text-blue-400 font-semibold hover:underline">عرض الكل</button>
+        </div>
+        <div id="lowStockList" class="space-y-2">
+          <!-- Low stock items injected via JS -->
+          <p class="text-xs text-slate-400 text-center py-2">المخزون في حالة ممتازة ولا توجد نواقص.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ----------------------------------------------------------------- -->
+    <!-- 2. TAB: SALES (المبيعات)                                          -->
+    <!-- ----------------------------------------------------------------- -->
+    <section id="tab-sales" class="tab-content space-y-3">
+      <!-- Search & Date Filter Bar -->
+      <div class="bg-white dark:bg-slate-900 p-3 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm space-y-2.5">
+        <div class="relative">
+          <i data-lucide="search" class="w-4 h-4 absolute right-3 top-3 text-slate-400"></i>
+          <input type="text" id="salesSearchInput" placeholder="بحث برقم الفاتورة أو اسم العميل أو الهاتف..." class="w-full bg-slate-100 dark:bg-slate-800 text-xs rounded-xl pr-9 pl-3 py-2.5 border border-slate-200 dark:border-slate-700 outline-none focus:ring-2 focus:ring-blue-500">
+        </div>
+        <div class="flex items-center gap-2">
+          <input type="date" id="salesDateInput" class="flex-1 bg-slate-100 dark:bg-slate-800 text-xs font-medium rounded-xl px-3 py-2 border border-slate-200 dark:border-slate-700 outline-none">
+          <select id="salesPaymentFilter" class="bg-slate-100 dark:bg-slate-800 text-xs font-medium rounded-xl px-3 py-2 border border-slate-200 dark:border-slate-700 outline-none">
+            <option value="ALL">جميع طرق الدفع</option>
+            <option value="cash">نقدي (كاش)</option>
+            <option value="card">فيزا / كارت</option>
+            <option value="insta">انستاباي / محفظة</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- Invoices List Container -->
+      <div id="invoicesList" class="space-y-2.5">
+        <!-- Invoices injected via JS -->
+      </div>
+    </section>
+
+    <!-- ----------------------------------------------------------------- -->
+    <!-- 3. TAB: INVENTORY (المخزون)                                       -->
+    <!-- ----------------------------------------------------------------- -->
+    <section id="tab-inventory" class="tab-content space-y-3">
+      <!-- Inventory Controls -->
+      <div class="bg-white dark:bg-slate-900 p-3 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm space-y-2.5">
+        <div class="relative">
+          <i data-lucide="search" class="w-4 h-4 absolute right-3 top-3 text-slate-400"></i>
+          <input type="text" id="inventorySearchInput" placeholder="بحث باسم الصنف أو الباركود..." class="w-full bg-slate-100 dark:bg-slate-800 text-xs rounded-xl pr-9 pl-3 py-2.5 border border-slate-200 dark:border-slate-700 outline-none focus:ring-2 focus:ring-blue-500">
+        </div>
+        <div class="flex items-center justify-between pt-1">
+          <label class="flex items-center gap-2 text-xs font-semibold text-slate-700 dark:text-slate-300 cursor-pointer">
+            <input type="checkbox" id="lowStockOnlyToggle" class="w-4 h-4 rounded text-blue-600 focus:ring-blue-500">
+            <span>عرض النواقص فقط (الكمية &le; حد الطلب)</span>
+          </label>
+          <span id="inventoryCountBadge" class="text-xs text-slate-400">0 صنف</span>
+        </div>
+      </div>
+
+      <!-- Products List Container -->
+      <div id="productsList" class="space-y-2.5">
+        <!-- Products injected via JS -->
+      </div>
+    </section>
+
+    <!-- ----------------------------------------------------------------- -->
+    <!-- 4. TAB: TREASURY & SHIFTS (الخزينة والورديات)                     -->
+    <!-- ----------------------------------------------------------------- -->
+    <section id="tab-treasury" class="tab-content space-y-3">
+      <!-- Segmented Control Tabs -->
+      <div class="flex bg-slate-200 dark:bg-slate-800 p-1 rounded-xl gap-1">
+        <button id="subtabTreasuryBtn" class="flex-1 py-1.5 text-xs font-bold rounded-lg bg-white dark:bg-slate-900 text-blue-600 dark:text-blue-400 shadow-sm transition">حركات الخزينة</button>
+        <button id="subtabShiftsBtn" class="flex-1 py-1.5 text-xs font-bold rounded-lg text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white transition">سجل الورديات</button>
+      </div>
+
+      <!-- Subtab 1: Treasury Logs -->
+      <div id="subtabTreasuryContent" class="space-y-2.5">
+        <div id="treasuryLogsList" class="space-y-2.5">
+          <!-- Logs injected via JS -->
+        </div>
+      </div>
+
+      <!-- Subtab 2: Shifts Logs -->
+      <div id="subtabShiftsContent" class="hidden space-y-2.5">
+        <div id="shiftsLogsList" class="space-y-2.5">
+          <!-- Shifts injected via JS -->
+        </div>
+      </div>
+    </section>
+
+    <!-- ----------------------------------------------------------------- -->
+    <!-- 5. TAB: STAFF (إدارة الموظفين)                                    -->
+    <!-- ----------------------------------------------------------------- -->
+    <section id="tab-staff" class="tab-content space-y-3">
+      <!-- Staff Header with Add Button -->
+      <div class="flex items-center justify-between bg-white dark:bg-slate-900 p-3.5 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm">
+        <div>
+          <h2 class="text-sm font-bold text-slate-800 dark:text-slate-200">طاقم العمل والموظفين</h2>
+          <p class="text-[11px] text-slate-500 dark:text-slate-400">إدارة الصلاحيات والتفعيل المباشر مع الكاشير</p>
+        </div>
+        <button id="openAddStaffModalBtn" class="bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold px-3 py-2 rounded-xl flex items-center gap-1.5 shadow-md shadow-blue-500/20 active:scale-95 transition">
+          <i data-lucide="user-plus" class="w-4 h-4"></i>
+          <span>إضافة موظف</span>
+        </button>
+      </div>
+
+      <!-- Staff Users List Container -->
+      <div id="staffList" class="space-y-2.5">
+        <!-- Staff members injected via JS -->
+      </div>
+    </section>
+
+  </main>
+
+  <!-- ===================================================================== -->
+  <!-- Bottom Navigation Bar (5 Main Tabs)                                   -->
+  <!-- ===================================================================== -->
+  <nav class="fixed bottom-0 left-0 right-0 z-30 bg-white/95 dark:bg-slate-900/95 backdrop-blur border-t border-slate-200 dark:border-slate-800 shadow-lg pb-safe">
+    <div class="max-w-lg mx-auto flex items-center justify-around py-2 px-1">
+      <!-- 1. Dashboard -->
+      <button class="nav-tab-btn active flex-1 flex flex-col items-center gap-1 text-blue-600 dark:text-blue-400" data-tab="dashboard">
+        <i data-lucide="layout-dashboard" class="w-5 h-5"></i>
+        <span class="text-[10px] font-bold">الرئيسية</span>
+      </button>
+
+      <!-- 2. Sales -->
+      <button class="nav-tab-btn flex-1 flex flex-col items-center gap-1 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200" data-tab="sales">
+        <i data-lucide="receipt" class="w-5 h-5"></i>
+        <span class="text-[10px] font-bold">المبيعات</span>
+      </button>
+
+      <!-- 3. Inventory -->
+      <button class="nav-tab-btn flex-1 flex flex-col items-center gap-1 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200" data-tab="inventory">
+        <i data-lucide="package" class="w-5 h-5"></i>
+        <span class="text-[10px] font-bold">المخزون</span>
+      </button>
+
+      <!-- 4. Treasury & Shifts -->
+      <button class="nav-tab-btn flex-1 flex flex-col items-center gap-1 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200" data-tab="treasury">
+        <i data-lucide="coins" class="w-5 h-5"></i>
+        <span class="text-[10px] font-bold">الخزينة</span>
+      </button>
+
+      <!-- 5. Staff -->
+      <button class="nav-tab-btn flex-1 flex flex-col items-center gap-1 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200" data-tab="staff">
+        <i data-lucide="users" class="w-5 h-5"></i>
+        <span class="text-[10px] font-bold">الموظفون</span>
+      </button>
+    </div>
+  </nav>
+
+  <!-- ===================================================================== -->
+  <!-- MODALS CONTAINER                                                      -->
+  <!-- ===================================================================== -->
+
+  <!-- 1. Invoice Details Modal -->
+  <div id="invoiceModal" class="modal-overlay fixed inset-0 z-50 bg-black/60 backdrop-blur-sm hidden flex items-center justify-center p-4">
+    <div class="modal-content bg-white dark:bg-slate-900 w-full max-w-md rounded-2xl border border-slate-200 dark:border-slate-800 shadow-2xl overflow-hidden flex flex-col max-h-[85vh]">
+      <!-- Modal Header -->
+      <div class="p-4 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between bg-slate-50 dark:bg-slate-800/50">
+        <div>
+          <h3 class="text-sm font-black text-slate-900 dark:text-white flex items-center gap-2">
+            <i data-lucide="receipt" class="w-4 h-4 text-blue-500"></i>
+            تفاصيل الفاتورة <span id="modalInvoiceNo" class="num-ltr font-mono text-blue-600 dark:text-blue-400">#---</span>
+          </h3>
+          <p id="modalInvoiceDate" class="text-[11px] text-slate-400 mt-0.5">---</p>
+        </div>
+        <button id="closeInvoiceModalBtn" class="w-7 h-7 rounded-lg bg-slate-200 dark:bg-slate-700 flex items-center justify-center text-slate-600 dark:text-slate-300">
+          <i data-lucide="x" class="w-4 h-4"></i>
+        </button>
+      </div>
+
+      <!-- Modal Body (Items & Details) -->
+      <div class="p-4 overflow-y-auto space-y-4 flex-1">
+        <!-- Customer & Cashier Info -->
+        <div class="grid grid-cols-2 gap-2 text-xs bg-slate-50 dark:bg-slate-800/40 p-3 rounded-xl border border-slate-200/60 dark:border-slate-700/60">
+          <div>
+            <span class="text-slate-400 block text-[10px]">الكاشير المسؤول</span>
+            <span id="modalCashierName" class="font-bold">---</span>
+          </div>
+          <div>
+            <span class="text-slate-400 block text-[10px]">العميل</span>
+            <span id="modalCustomerName" class="font-bold">عميل نقدي</span>
+          </div>
+          <div>
+            <span class="text-slate-400 block text-[10px]">طريقة الدفع</span>
+            <span id="modalPaymentMethod" class="font-bold">---</span>
+          </div>
+          <div>
+            <span class="text-slate-400 block text-[10px]">الفرع</span>
+            <span id="modalBranchName" class="font-bold">---</span>
+          </div>
+        </div>
+
+        <!-- Items Table -->
+        <div>
+          <h4 class="text-xs font-bold text-slate-700 dark:text-slate-300 mb-2">الأصناف المباعة</h4>
+          <div class="border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden">
+            <table class="w-full text-xs text-right">
+              <thead class="bg-slate-100 dark:bg-slate-800/80 text-slate-500 dark:text-slate-400 font-semibold border-b border-slate-200 dark:border-slate-800">
+                <tr>
+                  <th class="p-2">الصنف</th>
+                  <th class="p-2 text-center">الكمية</th>
+                  <th class="p-2 text-center">السعر</th>
+                  <th class="p-2 text-left">الإجمالي</th>
+                </tr>
+              </thead>
+              <tbody id="modalItemsTbody" class="divide-y divide-slate-100 dark:divide-slate-800">
+                <!-- Items injected via JS -->
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- Financial Summary -->
+        <div class="bg-slate-50 dark:bg-slate-800/40 p-3 rounded-xl space-y-1.5 text-xs border border-slate-200/60 dark:border-slate-700/60">
+          <div class="flex justify-between text-slate-500 dark:text-slate-400">
+            <span>المجموع الفرعي:</span>
+            <span id="modalSubtotal" class="font-bold num-ltr">0.00 ج.م</span>
+          </div>
+          <div class="flex justify-between text-rose-500">
+            <span>الخصم:</span>
+            <span id="modalDiscount" class="font-bold num-ltr">- 0.00 ج.م</span>
+          </div>
+          <div class="flex justify-between text-slate-900 dark:text-white font-extrabold text-sm pt-1 border-t border-slate-200 dark:border-slate-700">
+            <span>الصافي النهائي:</span>
+            <span id="modalTotal" class="text-blue-600 dark:text-blue-400 num-ltr">0.00 ج.م</span>
+          </div>
+          <div class="flex justify-between text-slate-500 dark:text-slate-400 text-[11px]">
+            <span>المدفوع:</span>
+            <span id="modalPaid" class="font-bold num-ltr">0.00 ج.م</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 2. Edit Product Price / MinStock Modal -->
+  <div id="productModal" class="modal-overlay fixed inset-0 z-50 bg-black/60 backdrop-blur-sm hidden flex items-center justify-center p-4">
+    <div class="modal-content bg-white dark:bg-slate-900 w-full max-w-sm rounded-2xl border border-slate-200 dark:border-slate-800 shadow-2xl p-4 space-y-4">
+      <div class="flex items-center justify-between border-b border-slate-200 dark:border-slate-800 pb-2.5">
+        <h3 class="text-sm font-black text-slate-900 dark:text-white flex items-center gap-2">
+          <i data-lucide="edit-3" class="w-4 h-4 text-blue-500"></i>
+          تعديل سعر وبيانات الصنف
+        </h3>
+        <button id="closeProductModalBtn" class="w-7 h-7 rounded-lg bg-slate-200 dark:bg-slate-700 flex items-center justify-center text-slate-600 dark:text-slate-300">
+          <i data-lucide="x" class="w-4 h-4"></i>
+        </button>
+      </div>
+
+      <form id="editProductForm" class="space-y-3">
+        <input type="hidden" id="editProductId">
+        <div>
+          <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 mb-1">اسم الصنف</label>
+          <input type="text" id="editProductName" disabled class="w-full bg-slate-100 dark:bg-slate-800 text-xs rounded-xl px-3 py-2 border border-slate-200 dark:border-slate-700 font-bold text-slate-500">
+        </div>
+
+        <div>
+          <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 mb-1">سعر البيع (ج.م)</label>
+          <input type="number" step="0.5" id="editProductSalePrice" required class="w-full bg-slate-50 dark:bg-slate-800/80 text-xs rounded-xl px-3 py-2 border border-slate-200 dark:border-slate-700 outline-none focus:ring-2 focus:ring-blue-500 font-bold">
+        </div>
+
+        <div>
+          <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 mb-1">حد الطلب (تنبيه النواقص)</label>
+          <input type="number" step="1" id="editProductMinStock" required class="w-full bg-slate-50 dark:bg-slate-800/80 text-xs rounded-xl px-3 py-2 border border-slate-200 dark:border-slate-700 outline-none focus:ring-2 focus:ring-blue-500 font-bold">
+        </div>
+
+        <div class="pt-2 flex gap-2">
+          <button type="submit" class="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs py-2.5 rounded-xl shadow-md shadow-blue-500/20 active:scale-95 transition">
+            حفظ ومزامنة فورية
+          </button>
+          <button type="button" id="cancelProductModalBtn" class="px-4 bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-bold text-xs py-2.5 rounded-xl transition">
+            إلغاء
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- 3. Add Staff Modal -->
+  <div id="addStaffModal" class="modal-overlay fixed inset-0 z-50 bg-black/60 backdrop-blur-sm hidden flex items-center justify-center p-4">
+    <div class="modal-content bg-white dark:bg-slate-900 w-full max-w-sm rounded-2xl border border-slate-200 dark:border-slate-800 shadow-2xl p-4 space-y-3.5">
+      <div class="flex items-center justify-between border-b border-slate-200 dark:border-slate-800 pb-2.5">
+        <h3 class="text-sm font-black text-slate-900 dark:text-white flex items-center gap-2">
+          <i data-lucide="user-plus" class="w-4 h-4 text-emerald-500"></i>
+          إضافة موظف جديد
+        </h3>
+        <button id="closeAddStaffModalBtn" class="w-7 h-7 rounded-lg bg-slate-200 dark:bg-slate-700 flex items-center justify-center text-slate-600 dark:text-slate-300">
+          <i data-lucide="x" class="w-4 h-4"></i>
+        </button>
+      </div>
+
+      <form id="addStaffForm" class="space-y-3">
+        <div>
+          <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 mb-1">اسم المستخدم (لتسجيل الدخول) *</label>
+          <input type="text" id="newStaffUsername" required placeholder="مثال: ahmed_pos" class="w-full bg-slate-50 dark:bg-slate-800/80 text-xs rounded-xl px-3 py-2 border border-slate-200 dark:border-slate-700 outline-none focus:ring-2 focus:ring-blue-500">
+        </div>
+
+        <div>
+          <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 mb-1">الاسم الكامل للموظف</label>
+          <input type="text" id="newStaffFullName" placeholder="مثال: أحمد محمد علي" class="w-full bg-slate-50 dark:bg-slate-800/80 text-xs rounded-xl px-3 py-2 border border-slate-200 dark:border-slate-700 outline-none focus:ring-2 focus:ring-blue-500">
+        </div>
+
+        <div>
+          <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 mb-1">كلمة المرور (6 أرقام على الأقل) *</label>
+          <input type="password" id="newStaffPassword" required placeholder="••••••" class="w-full bg-slate-50 dark:bg-slate-800/80 text-xs rounded-xl px-3 py-2 border border-slate-200 dark:border-slate-700 outline-none focus:ring-2 focus:ring-blue-500">
+        </div>
+
+        <div class="grid grid-cols-2 gap-2">
+          <div>
+            <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 mb-1">الدور الوظيفي</label>
+            <select id="newStaffRole" class="w-full bg-slate-50 dark:bg-slate-800/80 text-xs rounded-xl px-2.5 py-2 border border-slate-200 dark:border-slate-700 outline-none">
+              <option value="Cashier">كاشير (Cashier)</option>
+              <option value="Manager">مدير (Manager)</option>
+              <option value="Admin">مسؤول (Admin)</option>
+              <option value="Inventory Manager">أمين مخزن</option>
+              <option value="Accountant">محاسب</option>
+            </select>
+          </div>
+          <div>
+            <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 mb-1">الفرع التابع له</label>
+            <select id="newStaffBranch" class="w-full bg-slate-50 dark:bg-slate-800/80 text-xs rounded-xl px-2.5 py-2 border border-slate-200 dark:border-slate-700 outline-none">
+              <!-- Injected dynamically -->
+            </select>
+          </div>
+        </div>
+
+        <div class="pt-2 flex gap-2">
+          <button type="submit" class="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs py-2.5 rounded-xl shadow-md shadow-emerald-500/20 active:scale-95 transition">
+            إنشاء وتفعيل سحابي
+          </button>
+          <button type="button" id="cancelAddStaffModalBtn" class="px-4 bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-bold text-xs py-2.5 rounded-xl transition">
+            إلغاء
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- 4. Change Password Modal -->
+  <div id="changePasswordModal" class="modal-overlay fixed inset-0 z-50 bg-black/60 backdrop-blur-sm hidden flex items-center justify-center p-4">
+    <div class="modal-content bg-white dark:bg-slate-900 w-full max-w-sm rounded-2xl border border-slate-200 dark:border-slate-800 shadow-2xl p-4 space-y-3.5">
+      <div class="flex items-center justify-between border-b border-slate-200 dark:border-slate-800 pb-2.5">
+        <h3 class="text-sm font-black text-slate-900 dark:text-white flex items-center gap-2">
+          <i data-lucide="key" class="w-4 h-4 text-amber-500"></i>
+          تغيير كلمة المرور للموظف
+        </h3>
+        <button id="closeChangePasswordModalBtn" class="w-7 h-7 rounded-lg bg-slate-200 dark:bg-slate-700 flex items-center justify-center text-slate-600 dark:text-slate-300">
+          <i data-lucide="x" class="w-4 h-4"></i>
+        </button>
+      </div>
+
+      <form id="changePasswordForm" class="space-y-3">
+        <input type="hidden" id="changePasswordUserId">
+        <div>
+          <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 mb-1">الموظف</label>
+          <input type="text" id="changePasswordStaffName" disabled class="w-full bg-slate-100 dark:bg-slate-800 text-xs rounded-xl px-3 py-2 border border-slate-200 dark:border-slate-700 font-bold text-slate-500">
+        </div>
+
+        <div>
+          <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 mb-1">كلمة المرور الجديدة (6 أرقام على الأقل) *</label>
+          <input type="password" id="newStaffPasswordInput" required placeholder="••••••" class="w-full bg-slate-50 dark:bg-slate-800/80 text-xs rounded-xl px-3 py-2 border border-slate-200 dark:border-slate-700 outline-none focus:ring-2 focus:ring-blue-500">
+        </div>
+
+        <div class="pt-2 flex gap-2">
+          <button type="submit" class="flex-1 bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs py-2.5 rounded-xl shadow-md shadow-amber-500/20 active:scale-95 transition">
+            حفظ وتشفير PBKDF2
+          </button>
+          <button type="button" id="cancelChangePasswordModalBtn" class="px-4 bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-bold text-xs py-2.5 rounded-xl transition">
+            إلغاء
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- 5. Login / Auth Screen Modal -->
+  <div id="loginModal" class="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-md hidden flex items-center justify-center p-4">
+    <div class="bg-white dark:bg-slate-900 w-full max-w-sm rounded-3xl border border-slate-200 dark:border-slate-800 shadow-2xl p-6 space-y-5">
+      <!-- Header / Logo -->
+      <div class="text-center space-y-2">
+        <div class="w-14 h-14 mx-auto rounded-2xl bg-gradient-to-tr from-amber-500 to-amber-300 flex items-center justify-center text-slate-950 shadow-lg shadow-amber-500/30">
+          <i data-lucide="crown" class="w-8 h-8"></i>
+        </div>
+        <h2 class="text-xl font-black text-slate-900 dark:text-white">ELKing POS</h2>
+        <p class="text-xs text-slate-500 dark:text-slate-400">لوحة تحكم صاحب المحل — تسجيل الدخول</p>
+      </div>
+
+      <!-- Connected Store Badge (Smart QR Onboarding) -->
+      <div id="connectedStoreBadge" class="bg-blue-50 dark:bg-blue-900/30 border border-blue-200 dark:border-blue-800/60 rounded-2xl p-2.5 flex items-center justify-between text-xs">
+        <div class="flex items-center gap-2">
+          <div class="w-7 h-7 rounded-lg bg-blue-600 text-white flex items-center justify-center text-xs">
+            <i data-lucide="store" class="w-4 h-4"></i>
+          </div>
+          <div class="text-right">
+            <span class="text-[10px] text-blue-500 dark:text-blue-400 font-semibold block leading-tight">متصل بمتجر:</span>
+            <span id="connectedStoreName" class="font-bold text-slate-800 dark:text-slate-100 text-xs">متجر إلكينج</span>
+          </div>
+        </div>
+        <button id="changeStoreBtn" type="button" class="text-[10px] text-blue-600 dark:text-blue-400 font-bold bg-white dark:bg-slate-800 px-2.5 py-1 rounded-lg border border-blue-200 dark:border-slate-700 hover:bg-blue-50 dark:hover:bg-slate-700 transition active:scale-95">
+          تغيير المتجر
+        </button>
+      </div>
+
+      <!-- Login Form -->
+      <form id="loginForm" class="space-y-3.5">
+        <div>
+          <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 mb-1">اسم المستخدم للمدير</label>
+          <div class="relative">
+            <i data-lucide="user" class="w-4 h-4 absolute right-3 top-3 text-slate-400"></i>
+            <input type="text" id="loginUsername" required placeholder="اسم المستخدم (مثال: manager)" class="w-full bg-slate-50 dark:bg-slate-800/80 text-xs rounded-xl pr-9 pl-3 py-2.5 border border-slate-200 dark:border-slate-700 outline-none focus:ring-2 focus:ring-blue-500">
+          </div>
+        </div>
+
+        <div>
+          <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 mb-1">كلمة المرور</label>
+          <div class="relative">
+            <i data-lucide="lock" class="w-4 h-4 absolute right-3 top-3 text-slate-400"></i>
+            <input type="password" id="loginPassword" required placeholder="••••••" class="w-full bg-slate-50 dark:bg-slate-800/80 text-xs rounded-xl pr-9 pl-3 py-2.5 border border-slate-200 dark:border-slate-700 outline-none focus:ring-2 focus:ring-blue-500">
+          </div>
+        </div>
+
+        <button type="submit" id="loginSubmitBtn" class="w-full bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white font-bold text-xs py-3 rounded-xl shadow-lg shadow-blue-500/25 active:scale-95 transition flex items-center justify-center gap-2">
+          <i data-lucide="log-in" class="w-4 h-4"></i>
+          <span>دخول لوحة التحكم</span>
+        </button>
+      </form>
+
+      <!-- Advanced Connection Settings Accordion -->
+      <div class="pt-2 border-t border-slate-200 dark:border-slate-800">
+        <button id="toggleServerSettingsBtn" type="button" class="text-[11px] text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 flex items-center justify-between w-full">
+          <span>إعدادات الاتصال بالخادم السحابي</span>
+          <i data-lucide="chevron-down" class="w-3.5 h-3.5 transition-transform" id="chevronSettings"></i>
+        </button>
+
+        <div id="serverSettingsPanel" class="hidden mt-2.5 space-y-2 text-xs">
+          <div>
+            <label class="block text-[10px] text-slate-400">Project URL</label>
+            <input type="text" id="cfgUrl" class="w-full bg-slate-100 dark:bg-slate-800 text-[11px] rounded-lg p-1.5 border border-slate-200 dark:border-slate-700 font-mono">
+          </div>
+          <div>
+            <label class="block text-[10px] text-slate-400">Anon Key</label>
+            <input type="text" id="cfgKey" class="w-full bg-slate-100 dark:bg-slate-800 text-[11px] rounded-lg p-1.5 border border-slate-200 dark:border-slate-700 font-mono">
+          </div>
+          <div>
+            <label class="block text-[10px] text-slate-400">Store UUID</label>
+            <input type="text" id="cfgStoreId" class="w-full bg-slate-100 dark:bg-slate-800 text-[11px] rounded-lg p-1.5 border border-slate-200 dark:border-slate-700 font-mono">
+          </div>
+          <button id="saveConfigBtn" type="button" class="w-full bg-slate-200 dark:bg-slate-800 text-slate-800 dark:text-slate-200 text-xs font-bold py-1.5 rounded-lg">
+            حفظ إعدادات السيرفر
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast Notification Popup -->
+  <div id="toast" class="fixed top-5 left-1/2 -translate-x-1/2 z-50 bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900 px-4 py-2.5 rounded-2xl shadow-2xl text-xs font-bold flex items-center gap-2 transition-all duration-300 opacity-0 pointer-events-none -translate-y-4">
+    <i data-lucide="check-circle" class="w-4 h-4 text-emerald-400 dark:text-emerald-600" id="toastIcon"></i>
+    <span id="toastMsg">تمت العملية بنجاح</span>
+  </div>
+
+  <!-- Scripts -->
+  <script src="./js/crypto-utils.js"></script>
+  <script src="./js/supabase-client.js"></script>
+  <script src="./js/app.js"></script>
+  <script>
+    // تسجيل الـ Service Worker عند دعم المتصفح
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('./service-worker.js').catch(err => {
+          console.debug('ServiceWorker registration error:', err);
+        });
+      });
+    }
+  </script>
+</body>
+</html>
