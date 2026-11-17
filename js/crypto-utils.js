@@ -31,6 +31,24 @@
   }
 
   /**
+   * تحويل نص ست عشري (hex) إلى Uint8Array بايتات خام
+   */
+  function hexToBytes(hex) {
+    if (typeof hex !== 'string' || hex.length % 2 !== 0) return null;
+    try {
+      const bytes = new Uint8Array(hex.length / 2);
+      for (let i = 0; i < hex.length; i += 2) {
+        const val = parseInt(hex.substring(i, i + 2), 16);
+        if (isNaN(val)) return null;
+        bytes[i / 2] = val;
+      }
+      return bytes;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /**
    * مقارنة آمنة زمنياً (Constant-time string comparison) لمنع هجمات التوقيت
    */
   function timingSafeEqual(a, b) {
@@ -45,8 +63,9 @@
 
   /**
    * اشتقاق تجزئة PBKDF2-SHA256
+   * يقبل الملح كـ نص (UTF-8 bytes) أو كـ مصفوفة بايتات Uint8Array مباشرة
    */
-  async function derivePBKDF2(password, saltHex, iterations = 200000) {
+  async function derivePBKDF2(password, salt, iterations = 200000) {
     const keyMaterial = await crypto.subtle.importKey(
       'raw',
       enc.encode(password),
@@ -55,10 +74,14 @@
       ['deriveBits']
     );
 
+    const saltBuffer = (salt instanceof Uint8Array || salt instanceof ArrayBuffer)
+      ? salt
+      : enc.encode(String(salt));
+
     const bits = await crypto.subtle.deriveBits(
       {
         name: 'PBKDF2',
-        salt: enc.encode(saltHex),
+        salt: saltBuffer,
         iterations: iterations,
         hash: 'SHA-256',
       },
@@ -111,16 +134,30 @@
     }
 
     if (targetSalt) {
-      // 1. فحص PBKDF2 مع 200,000 دورة (النسق الحالي المعتمد)
-      const candidate200k = await derivePBKDF2(plainPassword, targetSalt, 200000);
-      if (timingSafeEqual(candidate200k, targetHash)) {
+      // 1. فحص PBKDF2 مع 200,000 دورة مع Salt كـ UTF-8 bytes (المطابق المعتمد لـ Python salt.encode('utf-8'))
+      const candidate200kUtf8 = await derivePBKDF2(plainPassword, enc.encode(targetSalt), 200000);
+      if (timingSafeEqual(candidate200kUtf8, targetHash)) {
         return true;
       }
 
-      // 2. فحص PBKDF2 القديم مع 100,000 دورة (V6/V7 توافق رجعي)
-      const candidate100k = await derivePBKDF2(plainPassword, targetSalt, 100000);
-      if (timingSafeEqual(candidate100k, targetHash)) {
+      // 2. فحص PBKDF2 مع 100,000 دورة مع Salt كـ UTF-8 bytes (V6/V7 توافق رجعي)
+      const candidate100kUtf8 = await derivePBKDF2(plainPassword, enc.encode(targetSalt), 100000);
+      if (timingSafeEqual(candidate100kUtf8, targetHash)) {
         return true;
+      }
+
+      // 3. فحص PBKDF2 إذا كان Salt مشفراً كـ Hex Bytes خام (bytes.fromhex(targetSalt))
+      const rawHexBytes = hexToBytes(targetSalt);
+      if (rawHexBytes) {
+        const candidate200kHex = await derivePBKDF2(plainPassword, rawHexBytes, 200000);
+        if (timingSafeEqual(candidate200kHex, targetHash)) {
+          return true;
+        }
+
+        const candidate100kHex = await derivePBKDF2(plainPassword, rawHexBytes, 100000);
+        if (timingSafeEqual(candidate100kHex, targetHash)) {
+          return true;
+        }
       }
 
       return false;
@@ -137,6 +174,7 @@
 
   const CryptoUtils = {
     generateSaltHex,
+    hexToBytes,
     hashPassword,
     verifyPassword,
     derivePBKDF2,

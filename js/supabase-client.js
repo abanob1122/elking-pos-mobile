@@ -13,6 +13,26 @@
     THEME: 'elking_pwa_theme',
   };
 
+  const storage = {
+    getItem(key) {
+      try {
+        return typeof localStorage !== 'undefined' ? localStorage.getItem(key) : null;
+      } catch (_) {
+        return null;
+      }
+    },
+    setItem(key, val) {
+      try {
+        if (typeof localStorage !== 'undefined') localStorage.setItem(key, val);
+      } catch (_) {}
+    },
+    removeItem(key) {
+      try {
+        if (typeof localStorage !== 'undefined') localStorage.removeItem(key);
+      } catch (_) {}
+    },
+  };
+
   const DEFAULT_CONFIG = {
     url: 'https://ohhfnbjzwpntzkawgwbk.supabase.co',
     anonKey: 'sb_publishable_bu8eKSNTAr_OjpxNRNkBoA_s71lo9Xf',
@@ -24,12 +44,12 @@
     constructor() {
       this.config = this._loadConfig();
       this.session = this._loadSession();
-      this.activeBranchId = localStorage.getItem(STORAGE_KEYS.ACTIVE_BRANCH) || 'ALL';
+      this.activeBranchId = storage.getItem(STORAGE_KEYS.ACTIVE_BRANCH) || 'ALL';
     }
 
     _loadConfig() {
       try {
-        const saved = localStorage.getItem(STORAGE_KEYS.CONFIG);
+        const saved = storage.getItem(STORAGE_KEYS.CONFIG);
         return saved ? { ...DEFAULT_CONFIG, ...JSON.parse(saved) } : { ...DEFAULT_CONFIG };
       } catch (e) {
         return { ...DEFAULT_CONFIG };
@@ -38,12 +58,12 @@
 
     saveConfig(newConfig) {
       this.config = { ...this.config, ...newConfig };
-      localStorage.setItem(STORAGE_KEYS.CONFIG, JSON.stringify(this.config));
+      storage.setItem(STORAGE_KEYS.CONFIG, JSON.stringify(this.config));
     }
 
     _loadSession() {
       try {
-        const saved = localStorage.getItem(STORAGE_KEYS.SESSION);
+        const saved = storage.getItem(STORAGE_KEYS.SESSION);
         return saved ? JSON.parse(saved) : null;
       } catch (e) {
         return null;
@@ -52,12 +72,12 @@
 
     saveSession(userData) {
       this.session = userData;
-      localStorage.setItem(STORAGE_KEYS.SESSION, JSON.stringify(userData));
+      storage.setItem(STORAGE_KEYS.SESSION, JSON.stringify(userData));
     }
 
     clearSession() {
       this.session = null;
-      localStorage.removeItem(STORAGE_KEYS.SESSION);
+      storage.removeItem(STORAGE_KEYS.SESSION);
     }
 
     isLoggedIn() {
@@ -66,7 +86,7 @@
 
     setActiveBranch(branchId) {
       this.activeBranchId = branchId || 'ALL';
-      localStorage.setItem(STORAGE_KEYS.ACTIVE_BRANCH, this.activeBranchId);
+      storage.setItem(STORAGE_KEYS.ACTIVE_BRANCH, this.activeBranchId);
     }
 
     getActiveBranch() {
@@ -137,19 +157,25 @@
         throw new Error('هذا الحساب معطّل من قِبل إدارة النظام');
       }
 
-      // التحقق من الدور (صاحب المحل / مدير)
-      const allowedRoles = ['Admin', 'Manager', 'مدير', 'ادمن', 'صاحب العمل', 'المدير'];
-      const userRole = (user.role || '').toLowerCase();
-      const hasManagerRole = allowedRoles.some(r => r.toLowerCase() === userRole);
+      // التحقق من الدور (صاحب المحل / مدير / مسؤول - Admin / Manager)
+      const roleNormalized = (user.role || '').trim().toLowerCase();
+      const allowedRoles = ['admin', 'manager', 'owner', 'مدير', 'ادمن', 'مسؤول', 'صاحب المحل', 'صاحب العمل', 'المدير'];
+      const hasPrivilegedRole = allowedRoles.includes(roleNormalized)
+        || roleNormalized.includes('admin')
+        || roleNormalized.includes('manage')
+        || roleNormalized.includes('owner')
+        || roleNormalized.includes('مدير')
+        || roleNormalized.includes('ادمن');
 
-      // التحقق من كلمة المرور عبر CryptoUtils المشتركة
-      const isMatch = await window.CryptoUtils.verifyPassword(password, user.password_hash);
-      if (!isMatch) {
-        throw new Error('كلمة المرور غير صحيحة');
+      if (!hasPrivilegedRole) {
+        throw new Error('تطبيق صاحب المحل مخصص للمديرين والمسؤولين فقط (دورك الحالي: ' + (user.role || 'غير محدد') + ')');
       }
 
-      if (!hasManagerRole && user.role !== 'Admin' && user.role !== 'Manager') {
-        throw new Error('تطبيق صاحب المحل مخصص للمديرين والمشرفين فقط (دورك الحالي: ' + user.role + ')');
+      // التحقق من كلمة المرور عبر CryptoUtils المشتركة
+      const cryptoLib = (typeof window !== 'undefined' && window.CryptoUtils) || (typeof globalThis !== 'undefined' && globalThis.CryptoUtils) || (typeof CryptoUtils !== 'undefined' && CryptoUtils);
+      const isMatch = await cryptoLib.verifyPassword(password, user.password_hash);
+      if (!isMatch) {
+        throw new Error('كلمة المرور غير صحيحة');
       }
 
       const session = {
@@ -391,7 +417,8 @@
       }
 
       // تشفير كلمة المرور بنفس خوارزمية البرنامج المكتبي PBKDF2
-      const hashResult = await window.CryptoUtils.hashPassword(password);
+      const cryptoLib = (typeof window !== 'undefined' && window.CryptoUtils) || (typeof globalThis !== 'undefined' && globalThis.CryptoUtils) || (typeof CryptoUtils !== 'undefined' && CryptoUtils);
+      const hashResult = await cryptoLib.hashPassword(password);
 
       const payload = {
         store_id: this.config.storeId,
@@ -426,7 +453,8 @@
       if (branch_id !== undefined) payload.branch_id = branch_id || null;
 
       if (password && password.trim()) {
-        const hashResult = await window.CryptoUtils.hashPassword(password.trim());
+        const cryptoLib = (typeof window !== 'undefined' && window.CryptoUtils) || (typeof globalThis !== 'undefined' && globalThis.CryptoUtils) || (typeof CryptoUtils !== 'undefined' && CryptoUtils);
+        const hashResult = await cryptoLib.hashPassword(password.trim());
         payload.password_hash = hashResult.combined;
       }
 
@@ -464,6 +492,13 @@
     }
   }
 
-  // تصدير الكائن العام
-  window.SupabaseClient = new SupabaseClient();
+  // تصدير الكائن العام للـ Browser و Node.js
+  const clientInstance = new SupabaseClient();
+  if (typeof window !== 'undefined') {
+    window.SupabaseClient = clientInstance;
+  }
+  if (typeof module !== 'undefined' && module.exports) {
+    module.exports = clientInstance;
+    module.exports.SupabaseClient = SupabaseClient;
+  }
 })(typeof window !== 'undefined' ? window : globalThis);
