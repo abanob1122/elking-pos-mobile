@@ -14,20 +14,29 @@
   };
 
   /**
-   * قراءة المبلغ الفعلي للفاتورة بترتيب الأولوية الصحيح لمنع ظهور 0.00 ج.م
-   * الأولوية: net_total -> total_amount -> total -> subtotal -> 0
+   * قراءة المبلغ الفعلي للفاتورة بترتيب الأولوية الصحيح وحماية تلقائية من القيم الصفرية
+   * الأولوية: net_total -> total_amount / total -> (subtotal - discount + tax) -> subtotal -> paid_amount -> 0
    */
   function getSaleAmount(sale) {
     if (!sale) return 0;
-    const net = Number(sale.net_total ?? sale.total_amount ?? sale.total ?? sale.subtotal ?? 0);
+    const net = Number(sale.net_total);
     if (!isNaN(net) && net > 0) return net;
+
+    const total = Number(sale.total_amount !== undefined && sale.total_amount !== null && Number(sale.total_amount) > 0 ? sale.total_amount : sale.total);
+    if (!isNaN(total) && total > 0) return total;
+
     const sub = Number(sale.subtotal || 0);
+    const disc = Number(sale.discount || 0) + Number(sale.coupon_discount || 0) + Number(sale.points_discount || 0);
+    const tax = Number(sale.tax_amount || 0);
+    const calc = sub - disc + tax;
+    if (!isNaN(calc) && calc > 0) return calc;
+
     if (!isNaN(sub) && sub > 0) return sub;
-    const tot = Number(sale.total || 0);
-    if (!isNaN(tot) && tot > 0) return tot;
+
     const paid = Number(sale.paid_amount || 0);
     if (!isNaN(paid) && paid > 0) return paid;
-    return Number(sale.net_total ?? sale.total_amount ?? sale.total ?? sale.subtotal ?? 0);
+
+    return 0;
   }
 
   /**
@@ -419,7 +428,20 @@
       }
 
       if (paymentMethod && paymentMethod !== 'ALL') {
-        filters.push(`payment_method=ilike.*${encodeURIComponent(paymentMethod)}*`);
+        const pm = String(paymentMethod).toLowerCase().trim();
+        if (pm === 'cash' || pm === 'كاش' || pm === 'نقدي') {
+          filters.push(`or=(payment_method.ilike.*كاش*,payment_method.ilike.*نقدي*,payment_method.ilike.*cash*)`);
+        } else if (pm === 'card' || pm === 'فيزا' || pm === 'شبكة' || pm === 'بطاقة') {
+          filters.push(`or=(payment_method.ilike.*فيزا*,payment_method.ilike.*شبكة*,payment_method.ilike.*card*,payment_method.ilike.*visa*,payment_method.ilike.*بطاقة*)`);
+        } else if (pm === 'insta' || pm === 'انستا' || pm === 'إنستا' || pm === 'instapay') {
+          filters.push(`or=(payment_method.ilike.*انستا*,payment_method.ilike.*insta*,payment_method.ilike.*إنستا*)`);
+        } else if (pm === 'wallet' || pm === 'محفظة' || pm === 'فودافون' || pm === 'vodafone') {
+          filters.push(`or=(payment_method.ilike.*محفظة*,payment_method.ilike.*wallet*,payment_method.ilike.*فودافون*,payment_method.ilike.*vodafone*,payment_method.ilike.*اورنج*,payment_method.ilike.*orange*,payment_method.ilike.*we pay*)`);
+        } else if (pm === 'credit' || pm === 'آجل' || pm === 'اجل') {
+          filters.push(`or=(payment_method.ilike.*آجل*,payment_method.ilike.*اجل*,payment_method.ilike.*credit*)`);
+        } else {
+          filters.push(`payment_method=ilike.*${encodeURIComponent(paymentMethod)}*`);
+        }
       }
 
       if (search && search.trim()) {

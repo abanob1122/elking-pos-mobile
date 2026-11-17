@@ -36,20 +36,29 @@
   }
 
   /**
-   * قراءة المبلغ الفعلي للفاتورة بترتيب الأولوية الصحيح لمنع ظهور 0.00 ج.م
-   * الأولوية: net_total -> total_amount -> total -> subtotal -> 0
+   * قراءة المبلغ الفعلي للفاتورة بترتيب الأولوية الصحيح وحماية تلقائية من القيم الصفرية
+   * الأولوية: net_total -> total_amount / total -> (subtotal - discount + tax) -> subtotal -> paid_amount -> 0
    */
   function getSaleAmount(sale) {
     if (!sale) return 0;
-    const net = Number(sale.net_total ?? sale.total_amount ?? sale.total ?? sale.subtotal ?? 0);
+    const net = Number(sale.net_total);
     if (!isNaN(net) && net > 0) return net;
+
+    const total = Number(sale.total_amount !== undefined && sale.total_amount !== null && Number(sale.total_amount) > 0 ? sale.total_amount : sale.total);
+    if (!isNaN(total) && total > 0) return total;
+
     const sub = Number(sale.subtotal || 0);
+    const disc = Number(sale.discount || 0) + Number(sale.coupon_discount || 0) + Number(sale.points_discount || 0);
+    const tax = Number(sale.tax_amount || 0);
+    const calc = sub - disc + tax;
+    if (!isNaN(calc) && calc > 0) return calc;
+
     if (!isNaN(sub) && sub > 0) return sub;
-    const tot = Number(sale.total || 0);
-    if (!isNaN(tot) && tot > 0) return tot;
+
     const paid = Number(sale.paid_amount || 0);
     if (!isNaN(paid) && paid > 0) return paid;
-    return Number(sale.net_total ?? sale.total_amount ?? sale.total ?? sale.subtotal ?? 0);
+
+    return 0;
   }
 
   function formatDateTime(isoString) {
@@ -721,7 +730,7 @@
           </div>
 
           <div class="flex items-center justify-between mt-2 pt-2 border-t border-slate-100 dark:border-slate-800/80 text-[11px] text-slate-400">
-            <span>الكاشير: <strong class="text-slate-700 dark:text-slate-300">${s.cashier_name || 'كاشير'}</strong></span>
+            <span>الكاشير: <strong class="text-slate-700 dark:text-slate-300">${s.cashier_username || s.cashier_name || 'كاشير'}</strong></span>
             <span>${formatDateTime(s.sale_date || s.created_at)}</span>
           </div>
         </div>
@@ -747,7 +756,7 @@
     const setEl = (id, val) => { const e = el(id); if (e) e.textContent = val; };
     setEl('modalInvoiceNo', `#${sale.invoice_no || sale.id.substring(0, 8)}`);
     setEl('modalInvoiceDate', formatDateTime(sale.sale_date || sale.created_at));
-    setEl('modalCashierName', sale.cashier_name || sale.cashier_username || 'كاشير');
+    setEl('modalCashierName', sale.cashier_username || sale.cashier_name || 'كاشير');
     setEl('modalCustomerName', sale.customer_name || 'عميل نقدي');
     setEl('modalPaymentMethod', sale.payment_method || 'نقدي (كاش)');
     setEl('modalBranchName', getBranchName(sale.branch_id));
