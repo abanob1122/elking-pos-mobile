@@ -35,10 +35,33 @@
     return num.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' ج.م';
   }
 
+  /**
+   * قراءة المبلغ الفعلي للفاتورة بترتيب الأولوية الصحيح لمنع ظهور 0.00 ج.م
+   * الأولوية: net_total -> total_amount -> total -> subtotal -> 0
+   */
+  function getSaleAmount(sale) {
+    if (!sale) return 0;
+    const net = Number(sale.net_total ?? sale.total_amount ?? sale.total ?? sale.subtotal ?? 0);
+    if (!isNaN(net) && net > 0) return net;
+    const sub = Number(sale.subtotal || 0);
+    if (!isNaN(sub) && sub > 0) return sub;
+    const tot = Number(sale.total || 0);
+    if (!isNaN(tot) && tot > 0) return tot;
+    const paid = Number(sale.paid_amount || 0);
+    if (!isNaN(paid) && paid > 0) return paid;
+    return Number(sale.net_total ?? sale.total_amount ?? sale.total ?? sale.subtotal ?? 0);
+  }
+
   function formatDateTime(isoString) {
     if (!isoString) return '---';
     try {
-      const d = new Date(isoString);
+      let str = String(isoString).trim();
+      // تنسيق السلسلة إذا كانت Naive بدون إزاحة زمنية
+      if (!str.includes('+') && !str.includes('Z') && !str.match(/-\d{2}:\d{2}$/)) {
+        str = str.replace(' ', 'T');
+      }
+      const d = new Date(str);
+      if (isNaN(d.getTime())) return String(isoString).substring(0, 16);
       return d.toLocaleDateString('ar-EG', {
         day: 'numeric',
         month: 'short',
@@ -48,6 +71,25 @@
       });
     } catch (_) {
       return String(isoString).substring(0, 16);
+    }
+  }
+
+  function formatTime(isoString) {
+    if (!isoString) return '---';
+    try {
+      let str = String(isoString).trim();
+      if (!str.includes('+') && !str.includes('Z') && !str.match(/-\d{2}:\d{2}$/)) {
+        str = str.replace(' ', 'T');
+      }
+      const d = new Date(str);
+      if (isNaN(d.getTime())) return String(isoString).substring(11, 16);
+      return d.toLocaleTimeString('ar-EG', {
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: true,
+      });
+    } catch (_) {
+      return String(isoString).substring(11, 16);
     }
   }
 
@@ -659,7 +701,7 @@
     }
 
     listEl.innerHTML = sales.map(s => {
-      const total = Number(s.total ?? s.net_total ?? s.final_amount ?? 0);
+      const total = getSaleAmount(s);
       const method = s.payment_method || 'نقدي';
       let methodBadge = 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400';
       if (method.toLowerCase().includes('card') || method.includes('فيزا')) {
@@ -710,9 +752,9 @@
     setEl('modalPaymentMethod', sale.payment_method || 'نقدي (كاش)');
     setEl('modalBranchName', getBranchName(sale.branch_id));
 
-    const subtotal = Number(sale.subtotal ?? sale.total ?? 0);
+    const total = getSaleAmount(sale);
+    const subtotal = Number(sale.subtotal) > 0 ? Number(sale.subtotal) : total;
     const discount = Number(sale.discount ?? 0);
-    const total = Number(sale.total ?? sale.net_total ?? subtotal - discount);
     const paid = Number(sale.paid_amount ?? total);
 
     setEl('modalSubtotal', formatMoney(subtotal));

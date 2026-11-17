@@ -13,6 +13,37 @@
     THEME: 'elking_pwa_theme',
   };
 
+  /**
+   * قراءة المبلغ الفعلي للفاتورة بترتيب الأولوية الصحيح لمنع ظهور 0.00 ج.م
+   * الأولوية: net_total -> total_amount -> total -> subtotal -> 0
+   */
+  function getSaleAmount(sale) {
+    if (!sale) return 0;
+    const net = Number(sale.net_total ?? sale.total_amount ?? sale.total ?? sale.subtotal ?? 0);
+    if (!isNaN(net) && net > 0) return net;
+    const sub = Number(sale.subtotal || 0);
+    if (!isNaN(sub) && sub > 0) return sub;
+    const tot = Number(sale.total || 0);
+    if (!isNaN(tot) && tot > 0) return tot;
+    const paid = Number(sale.paid_amount || 0);
+    if (!isNaN(paid) && paid > 0) return paid;
+    return Number(sale.net_total ?? sale.total_amount ?? sale.total ?? sale.subtotal ?? 0);
+  }
+
+  /**
+   * توحيد وتصنيف طريقة الدفع عبر مختلف المسميات باللغتين العربية والإنجليزية
+   */
+  function categorizePayment(methodStr) {
+    if (!methodStr) return 'other';
+    const m = String(methodStr).toLowerCase().trim();
+    if (m.includes('card') || m.includes('فيزا') || m.includes('شبكة') || m.includes('بطاقة') || m.includes('visa') || m.includes('mada') || m.includes('master')) return 'card';
+    if (m.includes('insta') || m.includes('انستا') || m.includes('إنستا')) return 'instapay';
+    if (m.includes('wallet') || m.includes('محفظة') || m.includes('فودافون') || m.includes('vodafone') || m.includes('اورنج') || m.includes('orange') || m.includes('we pay')) return 'wallet';
+    if (m.includes('cash') || m.includes('نقدي') || m.includes('كاش')) return 'cash';
+    if (m.includes('credit') || m.includes('آجل') || m.includes('اجل')) return 'credit';
+    return 'other';
+  }
+
   const storage = {
     getItem(key) {
       try {
@@ -210,9 +241,10 @@
     // المؤشرات الرئيسية ولوحة المعلومات (Dashboard KPIs)
     // =========================================================================
     async getDashboardKPIs(branchId = 'ALL') {
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-      const todayISO = today.toISOString();
+      const now = new Date();
+      // حساب بداية ونهاية "اليوم" حسب التوقيت المحلي للمتصفح (وليس UTC لمنع ترحيل اليوم بعد منتصف الليل)
+      const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
+      const endOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
 
       let branchFilter = '';
       if (branchId && branchId !== 'ALL') {
@@ -220,33 +252,83 @@
       }
 
       // 1. مبيعات اليوم
-      const salesQuery = `/sales?store_id=eq.${this.config.storeId}${branchFilter}&sale_date=gte.${todayISO}&order=sale_date.desc`;
-      const sales = (await this.request(salesQuery)) || [];
+      const salesQuery = `/sales?store_id=eq.${this.config.storeId}${branchFilter}&sale_date=gte.${startOfDay.toISOString()}&sale_date=lte.${endOfDay.toISOString()}&order=sale_date.desc`;
+      let sales = (await this.request(salesQuery)) || [];
+
+      // إذا لم توجد فواتير بنطاق ISO الصريح، نجلب أحدث الفواتير ونفلتر حسب تاريخ اليوم المحلي كحماية إضافية
+      if (sales.length === 0) {
+        try {
+          const recent = (await this.request(`/sales?store_id=eq.${this.config.storeId}${branchFilter}&order=sale_date.desc&limit=100`)) || [];
+          sales = recent.filter(s => {
+            const dtStr = s.sale_date || s.created_at;
+            if (!dtStr) return false;
+            const d = new Date(dtStr);
+            return !isNaN(d.getTime()) &&
+                   d.getFullYear() === now.getFullYear() &&
+                   d.getMonth() === now.getMonth() &&
+                   d.getDate() === now.getDate();
+          });
+        } catch (_) {}
+      }
 
       let totalSales = 0;
       let invoicesCount = sales.length;
       let cashSales = 0;
       let cardSales = 0;
       let instapaySales = 0;
+      let walletSales = 0;
 
       for (const s of sales) {
-        const amt = Number(s.total ?? s.net_total ?? s.final_amount ?? 0);
+        // قراءة المبلغ الفعلي بدقة عبر getSaleAmount لمنع ظهور 0
+        const amt = getSaleAmount(s);
         totalSales += amt;
-        const method = (s.payment_method || '').toLowerCase();
-        if (method.includes('cash') || method.includes('نقدي') || method.includes('كاش')) {
-          cashSales += amt;
-        } else if (method.includes('card') || method.includes('فيزا') || method.includes('شبكة')) {
-          cardSales += amt;
-        } else if (method.includes('insta') || method.includes('انستا') || method.includes('محفظة') || method.includes('wallet')) {
-          instapaySales += amt;
+
+        // دعم الدفع المقسم (split_details)
+        let splitObj = null;
+        if (s.split_details) {
+          if (typeof s.split_details === 'object') {
+            splitObj = s.split_details;
+          } else if (typeof s.split_details === 'string') {
+            try { splitObj = JSON.parse(s.split_details); } catch (_) {}
+          }
+        }
+
+        if (splitObj && typeof splitObj === 'object' && Object.keys(splitObj).length > 0) {
+          for (const [k, v] of Object.entries(splitObj)) {
+            const splitAmt = Number(v || 0);
+            if (splitAmt <= 0) continue;
+            const cat = categorizePayment(k);
+            if (cat === 'cash') cashSales += splitAmt;
+            else if (cat === 'card') cardSales += splitAmt;
+            else if (cat === 'instapay') instapaySales += splitAmt;
+            else if (cat === 'wallet') walletSales += splitAmt;
+          }
+        } else {
+          const cat = categorizePayment(s.payment_method);
+          if (cat === 'cash') cashSales += amt;
+          else if (cat === 'card') cardSales += amt;
+          else if (cat === 'instapay') instapaySales += amt;
+          else if (cat === 'wallet') walletSales += amt;
         }
       }
 
       // 2. مصروفات اليوم من الخزينة
-      const treasuryQuery = `/treasury_logs?store_id=eq.${this.config.storeId}${branchFilter}&created_at=gte.${todayISO}`;
+      const treasuryQuery = `/treasury_logs?store_id=eq.${this.config.storeId}${branchFilter}&created_at=gte.${startOfDay.toISOString()}&created_at=lte.${endOfDay.toISOString()}`;
       let totalExpenses = 0;
       try {
-        const logs = (await this.request(treasuryQuery)) || [];
+        let logs = (await this.request(treasuryQuery)) || [];
+        if (logs.length === 0) {
+          const recentLogs = (await this.request(`/treasury_logs?store_id=eq.${this.config.storeId}${branchFilter}&order=created_at.desc&limit=100`)) || [];
+          logs = recentLogs.filter(l => {
+            const dtStr = l.created_at;
+            if (!dtStr) return false;
+            const d = new Date(dtStr);
+            return !isNaN(d.getTime()) &&
+                   d.getFullYear() === now.getFullYear() &&
+                   d.getMonth() === now.getMonth() &&
+                   d.getDate() === now.getDate();
+          });
+        }
         for (const l of logs) {
           const type = (l.type || l.trans_type || '').toLowerCase();
           if (type.includes('exp') || type.includes('صرف') || type.includes('مصروف')) {
@@ -255,12 +337,27 @@
         }
       } catch (_) {}
 
-      // 3. الورديات المفتوحة حالياً (Active Shifts)
+      // 3. الورديات المفتوحة حالياً (Active Shifts) ونقدية الدرج
       const shiftsQuery = `/shifts?store_id=eq.${this.config.storeId}${branchFilter}&end_time=is.null&order=start_time.desc`;
       let activeShifts = [];
+      let openShiftDrawerCash = 0;
       try {
         activeShifts = (await this.request(shiftsQuery)) || [];
+        for (const sh of activeShifts) {
+          const startCash = Number(sh.starting_cash || 0);
+          const shCashSales = Number(sh.cash_sales || 0);
+          const shExpenses = Number(sh.expenses || 0);
+          const currentInShift = startCash + shCashSales - shExpenses;
+          if (currentInShift > 0) {
+            openShiftDrawerCash += currentInShift;
+          }
+        }
       } catch (_) {}
+
+      // نقدية الدرج: من الوردية المفتوحة أو صافي الكاش ناقص المصروفات
+      const netCashInHand = openShiftDrawerCash > 0
+        ? openShiftDrawerCash
+        : Math.max(0, cashSales - totalExpenses);
 
       // 4. نواقص المخزون (Low Stock)
       const lowStockQuery = `/products?store_id=eq.${this.config.storeId}${branchFilter}&is_active=eq.true&limit=100`;
@@ -292,8 +389,9 @@
         cashSales,
         cardSales,
         instapaySales,
+        walletSales,
         totalExpenses,
-        netCashInHand: Math.max(0, cashSales - totalExpenses),
+        netCashInHand,
         activeShiftsCount: activeShifts.length,
         activeShifts,
         lowStockCount,
@@ -494,11 +592,18 @@
 
   // تصدير الكائن العام للـ Browser و Node.js
   const clientInstance = new SupabaseClient();
+  clientInstance.getSaleAmount = getSaleAmount;
+  clientInstance.categorizePayment = categorizePayment;
+
   if (typeof window !== 'undefined') {
     window.SupabaseClient = clientInstance;
+    window.getSaleAmount = getSaleAmount;
+    window.categorizePayment = categorizePayment;
   }
   if (typeof module !== 'undefined' && module.exports) {
     module.exports = clientInstance;
     module.exports.SupabaseClient = SupabaseClient;
+    module.exports.getSaleAmount = getSaleAmount;
+    module.exports.categorizePayment = categorizePayment;
   }
 })(typeof window !== 'undefined' ? window : globalThis);
