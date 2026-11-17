@@ -2,7 +2,7 @@
   "name": "ELKing POS - لوحة تحكم صاحب المحل",
   "short_name": "ELKing POS",
   "description": "تطبيق الموبايل لصاحب المحل لمتابعة المبيعات الحية والورديات والخزينة والمخزون والموظفين مع Supabase",
-  "start_url": "./index.html",
+  "start_url": "./",
   "scope": "./",
   "display": "standalone",
   "orientation": "portrait-primary",

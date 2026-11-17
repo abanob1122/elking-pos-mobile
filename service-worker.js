@@ -1,10 +1,10 @@
 /**
- * ELKing POS - Mobile PWA Service Worker
+ * ELKing POS - Mobile PWA Service Worker (v2)
  * يدعم التثبيت المباشر والعمل دون اتصال لشيل التطبيق (Offline App Shell)
- * مع استراتيجية Network-First للبيانات السحابية الحية
+ * متوافق 100% مع مسارات GitHub Pages والمجلدات الفرعية
  */
 
-const CACHE_NAME = 'elking-pos-v13-pwa-v1';
+const CACHE_NAME = 'elking-pos-v13-pwa-v2';
 const APP_SHELL_ASSETS = [
   './',
   './index.html',
@@ -58,28 +58,22 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // 2. ملفات الخطوط والـ CDNs الخارجية -> Cache First مع التحديث في الخلفية
+  // 2. ملفات الخطوط والـ CDNs الخارجية -> Stale-while-revalidate / Cache First
   if (url.origin.includes('fonts.googleapis.com') ||
       url.origin.includes('fonts.gstatic.com') ||
       url.origin.includes('cdn.tailwindcss.com') ||
       url.origin.includes('unpkg.com')) {
     event.respondWith(
       caches.match(event.request).then((cachedResponse) => {
-        if (cachedResponse) {
-          fetch(event.request).then((networkResponse) => {
-            if (networkResponse && networkResponse.status === 200) {
-              caches.open(CACHE_NAME).then((cache) => cache.put(event.request, networkResponse));
-            }
-          }).catch(() => {});
-          return cachedResponse;
-        }
-        return fetch(event.request).then((networkResponse) => {
+        const fetchPromise = fetch(event.request).then((networkResponse) => {
           if (networkResponse && networkResponse.status === 200) {
-            const responseClone = networkResponse.clone();
-            caches.open(CACHE_NAME).then((cache) => cache.put(event.request, responseClone));
+            const clone = networkResponse.clone();
+            caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
           }
           return networkResponse;
-        });
+        }).catch(() => cachedResponse);
+
+        return cachedResponse || fetchPromise;
       })
     );
     return;
@@ -88,13 +82,18 @@ self.addEventListener('fetch', (event) => {
   // 3. أصول التطبيق المحلية (App Shell) -> Cache First مع Fallback للشبكة
   event.respondWith(
     caches.match(event.request).then((response) => {
-      return response || fetch(event.request).then((networkResponse) => {
+      if (response) {
+        return response;
+      }
+      return fetch(event.request).then((networkResponse) => {
         if (networkResponse && networkResponse.status === 200 && event.request.method === 'GET') {
           const responseClone = networkResponse.clone();
           caches.open(CACHE_NAME).then((cache) => cache.put(event.request, responseClone));
         }
         return networkResponse;
       });
-    }).catch(() => caches.match('./index.html'))
+    }).catch(() => {
+      return caches.match('./index.html') || caches.match('./');
+    })
   );
 });
