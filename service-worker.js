@@ -1,10 +1,10 @@
 /**
- * ELKing POS - Mobile PWA Service Worker (v2)
+ * ELKing POS - Mobile PWA Service Worker (v3)
  * يدعم التثبيت المباشر والعمل دون اتصال لشيل التطبيق (Offline App Shell)
  * متوافق 100% مع مسارات GitHub Pages والمجلدات الفرعية
  */
 
-const CACHE_NAME = 'elking-pos-v13-pwa-v2';
+const CACHE_NAME = 'elking-pos-v13-pwa-v3';
 const APP_SHELL_ASSETS = [
   './',
   './index.html',

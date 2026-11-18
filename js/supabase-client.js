@@ -53,6 +53,103 @@
     return 'other';
   }
 
+  /**
+   * التحقق مما إذا كانت الفاتورة ملغاة أو مرتجعة لاستبعادها من إجماليات المبيعات
+   */
+  function isSaleExcluded(sale) {
+    if (!sale) return true;
+    const st = String(sale.status || '').toLowerCase().trim();
+    return (
+      st === 'cancelled' ||
+      st === 'voided' ||
+      st === 'ملغاة' ||
+      st === 'ملغي' ||
+      st === 'مرتجع' ||
+      sale.is_returned === true
+    );
+  }
+
+  /**
+   * استخراج الجزء النقدي (الكاش) من الفاتورة بما في ذلك الفواتير ذات الدفع المتعدد (split_details)
+   */
+  function getSaleCashAmount(sale) {
+    if (!sale || isSaleExcluded(sale)) return 0;
+    let splitObj = null;
+    if (sale.split_details) {
+      if (typeof sale.split_details === 'object') {
+        splitObj = sale.split_details;
+      } else if (typeof sale.split_details === 'string') {
+        try { splitObj = JSON.parse(sale.split_details); } catch (_) {}
+      }
+    }
+    if (splitObj && typeof splitObj === 'object' && Object.keys(splitObj).length > 0) {
+      let cashPart = 0;
+      for (const [k, v] of Object.entries(splitObj)) {
+        const splitAmt = Number(v || 0);
+        if (splitAmt > 0 && categorizePayment(k) === 'cash') {
+          cashPart += splitAmt;
+        }
+      }
+      return cashPart;
+    }
+    const cat = categorizePayment(sale.payment_method);
+    return cat === 'cash' ? getSaleAmount(sale) : 0;
+  }
+
+  /**
+   * التحقق مما إذا كانت حركة الخزينة مصروفاً تشغيلياً فعلياً فقط
+   * (يستبعد توريد_للخزينة وتغذية_وردية والإيداعات)
+   */
+  function isActualExpense(log) {
+    if (!log) return false;
+    const type = String(log.trans_type || log.type || '').trim();
+    const cat = String(log.category || '').trim();
+    const notes = String(log.notes || log.note || '').trim();
+    const combined = `${type} ${cat} ${notes}`.toLowerCase();
+
+    if (
+      type === 'توريد_للخزينة' ||
+      type === 'توريد للخزينة' ||
+      type === 'تغذية_وردية' ||
+      type === 'تغذية وردية' ||
+      combined.includes('توريد_للخزينة') ||
+      combined.includes('توريد للخزينة') ||
+      combined.includes('تغذية_وردية') ||
+      combined.includes('تغذية وردية') ||
+      type === 'إيداع' ||
+      type === 'ايداع' ||
+      type === 'وارد'
+    ) {
+      return false;
+    }
+
+    const allowedExpenseTypes = ['مصروف', 'مصروفات', 'مصروف عام', 'مصروفات وردية', 'صرف', 'expense'];
+    const typeLower = type.toLowerCase();
+    const catLower = cat.toLowerCase();
+    return (
+      allowedExpenseTypes.includes(typeLower) ||
+      allowedExpenseTypes.includes(catLower) ||
+      typeLower.includes('مصروف') ||
+      catLower.includes('مصروف')
+    );
+  }
+
+  /**
+   * التحقق مما إذا كانت حركة الخزينة تغذية وردية (صادر من الخزينة للدرج وليست مصروفاً)
+   */
+  function isShiftFeed(log) {
+    if (!log) return false;
+    const type = String(log.trans_type || log.type || '').trim();
+    const cat = String(log.category || '').trim();
+    const combined = `${type} ${cat}`.toLowerCase();
+    return (
+      type === 'تغذية_وردية' ||
+      type === 'تغذية وردية' ||
+      combined.includes('تغذية_وردية') ||
+      combined.includes('تغذية وردية')
+    );
+  }
+
   const storage = {
     getItem(key) {
       try {
@@ -85,6 +182,7 @@
       this.config = this._loadConfig();
       this.session = this._loadSession();
       this.activeBranchId = storage.getItem(STORAGE_KEYS.ACTIVE_BRANCH) || 'ALL';
+      this._branchesCache = null;
     }
 
     _loadConfig() {
@@ -98,6 +196,7 @@
 
     saveConfig(newConfig) {
       this.config = { ...this.config, ...newConfig };
+      this._branchesCache = null;
       storage.setItem(STORAGE_KEYS.CONFIG, JSON.stringify(this.config));
     }
 
@@ -176,7 +275,7 @@
     }
 
     // =========================================================================
-    // تسجيل الدخول والتحقق من كلمة المرور
+    // تسجيل الدخول والتحقق من كلمة المرور (مع دعم RPC الآمن والتراجع التلقائي)
     // =========================================================================
     async login(username, password) {
       const cleanUser = (username || '').trim();
@@ -184,8 +283,32 @@
         throw new Error('يرجى إدخال اسم المستخدم وكلمة المرور');
       }
 
-      const query = `/staff_users?store_id=eq.${this.config.storeId}&username=eq.${encodeURIComponent(cleanUser)}&is_deleted=eq.false&limit=1`;
-      const users = await this.request(query);
+      let users = null;
+
+      // 1. محاولة استدعاء RPC الآمن أولاً (/rpc/verify_staff_login)
+      try {
+        const rpcRes = await this.request('/rpc/verify_staff_login', {
+          method: 'POST',
+          body: {
+            p_store_id: this.config.storeId,
+            p_username: cleanUser,
+            p_password_hash: '',
+          },
+        });
+        if (Array.isArray(rpcRes) && rpcRes.length > 0) {
+          users = rpcRes;
+        } else if (rpcRes && typeof rpcRes === 'object' && rpcRes.username) {
+          users = [rpcRes];
+        }
+      } catch (_) {
+        // التراجع التلقائي للاستعلام المباشر إذا لم تكن دالة الـ RPC مفعلة
+      }
+
+      // 2. التراجع التلقائي (Fallback) إلى جدول staff_users
+      if (!users || users.length === 0) {
+        const query = `/staff_users?store_id=eq.${this.config.storeId}&username=eq.${encodeURIComponent(cleanUser)}&is_deleted=eq.false&limit=1`;
+        users = await this.request(query);
+      }
 
       if (!users || users.length === 0) {
         throw new Error('اسم المستخدم غير مسجل أو غير موجود');
@@ -224,7 +347,7 @@
         full_name: user.full_name || user.username,
         role: user.role,
         branch_id: user.branch_id,
-        store_id: user.store_id,
+        store_id: user.store_id || this.config.storeId,
         loggedInAt: new Date().toISOString(),
       };
 
@@ -237,7 +360,30 @@
     // =========================================================================
     async getBranches() {
       const query = `/branches?store_id=eq.${this.config.storeId}&order=is_main.desc,name.asc`;
-      return (await this.request(query)) || [];
+      const branches = (await this.request(query)) || [];
+      this._branchesCache = branches;
+      return branches;
+    }
+
+    /**
+     * بناء فلتر الفرع لجداول sales, shifts, treasury_logs (التي لا تحتوي على عمود store_id)
+     * عند اختيار فرع محدد: branch_id=eq.${branchId}
+     * عند اختيار 'ALL': جلب فروع المتجر واستخدام branch_id=in.(...) مع تراجع آمن
+     */
+    async _resolveBranchFilter(branchId = 'ALL') {
+      if (branchId && branchId !== 'ALL') {
+        return `branch_id=eq.${branchId}`;
+      }
+      try {
+        const branches = Array.isArray(this._branchesCache) && this._branchesCache.length > 0
+          ? this._branchesCache
+          : await this.getBranches();
+        const branchIds = (branches || []).map(b => b && b.id).filter(Boolean);
+        if (branchIds.length > 0) {
+          return `branch_id=in.(${branchIds.join(',')})`;
+        }
+      } catch (_) {}
+      return '';
     }
 
     async getStoreInfo() {
@@ -255,19 +401,39 @@
       const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
       const endOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
 
-      let branchFilter = '';
-      if (branchId && branchId !== 'ALL') {
-        branchFilter = `&branch_id=eq.${branchId}`;
+      const resolvedBranchClause = await this._resolveBranchFilter(branchId);
+      const branchQueryPrefix = resolvedBranchClause ? `${resolvedBranchClause}&` : '';
+      const productBranchFilter = (branchId && branchId !== 'ALL') ? `&branch_id=eq.${branchId}` : '';
+
+      const salesQuery = `/sales?${branchQueryPrefix}sale_date=gte.${startOfDay.toISOString()}&sale_date=lte.${endOfDay.toISOString()}&order=sale_date.desc`;
+      const treasuryQuery = `/treasury_logs?${branchQueryPrefix}created_at=gte.${startOfDay.toISOString()}&created_at=lte.${endOfDay.toISOString()}`;
+      const shiftsQuery = `/shifts?${branchQueryPrefix}or=(status.eq.Open,status.eq.مفتوحة,end_time.is.null)&order=start_time.desc`;
+      const lowStockQuery = `/products?store_id=eq.${this.config.storeId}${productBranchFilter}&is_active=eq.true&limit=5000`;
+
+      // جلب كافة بيانات لوحة التحكم على التوازي عبر Promise.allSettled
+      const [salesRes, treasuryRes, shiftsRes, productsRes] = await Promise.allSettled([
+        this.request(salesQuery),
+        this.request(treasuryQuery),
+        this.request(shiftsQuery),
+        this.request(lowStockQuery),
+      ]);
+
+      if (
+        salesRes.status === 'rejected' &&
+        treasuryRes.status === 'rejected' &&
+        shiftsRes.status === 'rejected' &&
+        productsRes.status === 'rejected'
+      ) {
+        throw salesRes.reason || new Error('تعذر الاتصال بالخادم السحابي');
       }
 
       // 1. مبيعات اليوم
-      const salesQuery = `/sales?store_id=eq.${this.config.storeId}${branchFilter}&sale_date=gte.${startOfDay.toISOString()}&sale_date=lte.${endOfDay.toISOString()}&order=sale_date.desc`;
-      let sales = (await this.request(salesQuery)) || [];
+      let sales = (salesRes.status === 'fulfilled' && salesRes.value) ? salesRes.value : [];
 
       // إذا لم توجد فواتير بنطاق ISO الصريح، نجلب أحدث الفواتير ونفلتر حسب تاريخ اليوم المحلي كحماية إضافية
-      if (sales.length === 0) {
+      if (sales.length === 0 && salesRes.status === 'fulfilled') {
         try {
-          const recent = (await this.request(`/sales?store_id=eq.${this.config.storeId}${branchFilter}&order=sale_date.desc&limit=100`)) || [];
+          const recent = (await this.request(`/sales?${branchQueryPrefix}order=sale_date.desc&limit=100`)) || [];
           sales = recent.filter(s => {
             const dtStr = s.sale_date || s.created_at;
             if (!dtStr) return false;
@@ -280,15 +446,17 @@
         } catch (_) {}
       }
 
+      // استبعاد الفواتير الملغاة أو المرتجعة (cancelled / voided / is_returned)
+      const validSales = sales.filter(s => !isSaleExcluded(s));
+
       let totalSales = 0;
-      let invoicesCount = sales.length;
+      let invoicesCount = validSales.length;
       let cashSales = 0;
       let cardSales = 0;
       let instapaySales = 0;
       let walletSales = 0;
 
-      for (const s of sales) {
-        // قراءة المبلغ الفعلي بدقة عبر getSaleAmount لمنع ظهور 0
+      for (const s of validSales) {
         const amt = getSaleAmount(s);
         totalSales += amt;
 
@@ -321,14 +489,13 @@
         }
       }
 
-      // 2. مصروفات اليوم من الخزينة والورديات
-      const treasuryQuery = `/treasury_logs?store_id=eq.${this.config.storeId}${branchFilter}&created_at=gte.${startOfDay.toISOString()}&created_at=lte.${endOfDay.toISOString()}`;
+      // 2. مصروفات اليوم الفعلية فقط (مع استبعاد توريد_للخزينة وتغذية_وردية)
       let totalExpenses = 0;
       const seenExpenseKeys = new Set();
       try {
-        let logs = (await this.request(treasuryQuery)) || [];
-        if (logs.length === 0) {
-          const recentLogs = (await this.request(`/treasury_logs?store_id=eq.${this.config.storeId}${branchFilter}&order=created_at.desc&limit=100`)) || [];
+        let logs = (treasuryRes.status === 'fulfilled' && treasuryRes.value) ? treasuryRes.value : [];
+        if (logs.length === 0 && treasuryRes.status === 'fulfilled') {
+          const recentLogs = (await this.request(`/treasury_logs?${branchQueryPrefix}order=created_at.desc&limit=100`)) || [];
           logs = recentLogs.filter(l => {
             const dtStr = l.created_at;
             if (!dtStr) return false;
@@ -340,16 +507,8 @@
           });
         }
         for (const l of logs) {
-          const type = String(l.type || l.trans_type || '').toLowerCase();
-          const cat = String(l.category || '').toLowerCase();
-          const notes = String(l.notes || l.note || '').toLowerCase();
-          const rawAmt = Number(l.amount || 0);
-          const isExpense = type.includes('exp') || type.includes('صرف') || type.includes('مصروف') ||
-                            type.includes('صادر') || type.includes('سحب') || type.includes('out') ||
-                            cat.includes('مصروف') || cat.includes('صرف') || cat.includes('expense') ||
-                            notes.includes('مصروف') || rawAmt < 0;
-          if (isExpense) {
-            const absAmt = Math.abs(rawAmt);
+          if (isActualExpense(l)) {
+            const absAmt = Math.abs(Number(l.amount || 0));
             totalExpenses += absAmt;
             if (l.local_trans_id) seenExpenseKeys.add(String(l.local_trans_id));
             if (l.shift_id) seenExpenseKeys.add(`shift_${l.shift_id}`);
@@ -358,20 +517,18 @@
       } catch (_) {}
 
       // 3. الورديات المفتوحة حالياً (Active Shifts) ونقدية الدرج
-      const shiftsQuery = `/shifts?store_id=eq.${this.config.storeId}${branchFilter}&or=(status.eq.Open,status.eq.مفتوحة,end_time.is.null)&order=start_time.desc`;
-      let activeShifts = [];
+      let activeShifts = (shiftsRes.status === 'fulfilled' && shiftsRes.value) ? shiftsRes.value : [];
       let openShiftDrawerCash = 0;
       try {
-        activeShifts = (await this.request(shiftsQuery)) || [];
         for (const sh of activeShifts) {
           const shStart = sh.start_time ? new Date(sh.start_time).getTime() : 0;
           const shUser = String(sh.username || sh.cashier_name || '').toLowerCase().trim();
           const shLocalId = Number(sh.local_shift_id || 0);
 
-          // حساب مبيعات الوردية المفتوحة لحظياً من فواتير اليوم الصادرة بعد وقت البدء
+          // حساب مبيعات الوردية المفتوحة لحظياً من فواتير اليوم الصادرة بعد وقت البدء (مع دعم split_details للدفع المتعدد)
           let realTimeShiftSales = 0;
           let realTimeShiftCashSales = 0;
-          for (const s of sales) {
+          for (const s of validSales) {
             const sDate = new Date(s.sale_date || s.created_at).getTime();
             const sUser = String(s.cashier_username || s.cashier_name || '').toLowerCase().trim();
             const sShiftId = Number(s.local_shift_id || s.shift_id || 0);
@@ -381,8 +538,7 @@
             if (matchesShift) {
               const amt = getSaleAmount(s);
               realTimeShiftSales += amt;
-              const cat = categorizePayment(s.payment_method);
-              if (cat === 'cash') realTimeShiftCashSales += amt;
+              realTimeShiftCashSales += getSaleCashAmount(s);
             }
           }
 
@@ -398,24 +554,24 @@
             totalExpenses += shExp;
           }
 
-          const startCash = Number(sh.starting_cash ?? sh.opening_cash ?? 0);
+          const openingCash = Number(sh.opening_cash ?? sh.starting_cash ?? 0);
+          const cashReturns = Number(sh.cash_returns || 0);
           const expToDeduct = shExp > 0 ? shExp : totalExpenses;
-          const currentInShift = startCash + shiftCashSales - expToDeduct;
+          const currentInShift = openingCash + shiftCashSales - cashReturns - expToDeduct;
           openShiftDrawerCash += currentInShift;
         }
       } catch (_) {}
 
-      // نقدية الدرج (كاش) — بعد خصم المصروفات النقدية
-      const netCashInHand = openShiftDrawerCash > 0
-        ? openShiftDrawerCash
+      // نقدية الدرج (كاش) — بعد خصم المصروفات النقدية والمرتجعات
+      const netCashInHand = activeShifts.length > 0
+        ? Math.max(0, openShiftDrawerCash)
         : Math.max(0, cashSales - totalExpenses);
 
-      // 4. نواقص المخزون (Low Stock)
-      const lowStockQuery = `/products?store_id=eq.${this.config.storeId}${branchFilter}&is_active=eq.true&limit=100`;
+      // 4. نواقص المخزون عبر كافة أصناف الفرع/المتجر (limit=5000)
       let lowStockCount = 0;
       let lowStockItems = [];
       try {
-        const products = (await this.request(lowStockQuery)) || [];
+        const products = (productsRes.status === 'fulfilled' && productsRes.value) ? productsRes.value : [];
         for (const p of products) {
           const qty = Number(p.stock_quantity ?? p.stock_qty ?? 0);
           const min = Number(p.min_stock ?? 5);
@@ -454,10 +610,10 @@
     // المبيعات والفواتير (Sales & Invoices)
     // =========================================================================
     async getSales({ branchId = 'ALL', date = null, paymentMethod = null, search = '', limit = 50, offset = 0 } = {}) {
-      let filters = [`store_id=eq.${this.config.storeId}`];
-
-      if (branchId && branchId !== 'ALL') {
-        filters.push(`branch_id=eq.${branchId}`);
+      const filters = [];
+      const branchClause = await this._resolveBranchFilter(branchId);
+      if (branchClause) {
+        filters.push(branchClause);
       }
 
       if (date) {
@@ -491,7 +647,8 @@
         filters.push(`or=(invoice_no.ilike.*${s}*,customer_name.ilike.*${s}*,customer_phone.ilike.*${s}*)`);
       }
 
-      const query = `/sales?${filters.join('&')}&order=sale_date.desc&limit=${limit}&offset=${offset}`;
+      const filterPrefix = filters.length > 0 ? `${filters.join('&')}&` : '';
+      const query = `/sales?${filterPrefix}order=sale_date.desc&limit=${limit}&offset=${offset}`;
       return (await this.request(query)) || [];
     }
 
@@ -514,10 +671,11 @@
 
       if (search && search.trim()) {
         const s = encodeURIComponent(search.trim());
-        filters.push(`or=(product_name.ilike.*${s}*,name.ilike.*${s}*,barcode_ean13.ilike.*${s}*,barcode.ilike.*${s}*)`);
+        filters.push(`or=(product_name.ilike.*${s}*,barcode_ean13.ilike.*${s}*)`);
       }
 
-      const query = `/products?${filters.join('&')}&order=product_name.asc,name.asc&limit=${limit}&offset=${offset}`;
+      const effectiveLimit = lowStockOnly ? Math.max(limit, 5000) : limit;
+      const query = `/products?${filters.join('&')}&order=product_name.asc&limit=${effectiveLimit}&offset=${offset}`;
       const products = (await this.request(query)) || [];
 
       if (lowStockOnly) {
@@ -548,20 +706,16 @@
     // الخزينة والورديات (Treasury & Shifts)
     // =========================================================================
     async getTreasuryLogs({ branchId = 'ALL', limit = 50, offset = 0 } = {}) {
-      let filters = [`store_id=eq.${this.config.storeId}`];
-      if (branchId && branchId !== 'ALL') {
-        filters.push(`branch_id=eq.${branchId}`);
-      }
-      const query = `/treasury_logs?${filters.join('&')}&order=created_at.desc&limit=${limit}&offset=${offset}`;
+      const branchClause = await this._resolveBranchFilter(branchId);
+      const filterPrefix = branchClause ? `${branchClause}&` : '';
+      const query = `/treasury_logs?${filterPrefix}order=created_at.desc&limit=${limit}&offset=${offset}`;
       return (await this.request(query)) || [];
     }
 
     async getShifts({ branchId = 'ALL', limit = 30, offset = 0 } = {}) {
-      let filters = [`store_id=eq.${this.config.storeId}`];
-      if (branchId && branchId !== 'ALL') {
-        filters.push(`branch_id=eq.${branchId}`);
-      }
-      const query = `/shifts?${filters.join('&')}&order=start_time.desc&limit=${limit}&offset=${offset}`;
+      const branchClause = await this._resolveBranchFilter(branchId);
+      const filterPrefix = branchClause ? `${branchClause}&` : '';
+      const query = `/shifts?${filterPrefix}order=start_time.desc&limit=${limit}&offset=${offset}`;
       return (await this.request(query)) || [];
     }
 
@@ -696,18 +850,25 @@
         const ref = String(_ref++);
         const topic = `realtime:public:${table}`;
         _subs[table] = ref;
+        const hasStoreIdCol = (table === 'products' || table === 'staff_users');
+        const activeBranch = this.getActiveBranch();
+        const pgConfig = {
+          event: '*',
+          schema: 'public',
+          table,
+        };
+        if (hasStoreIdCol) {
+          pgConfig.filter = `store_id=eq.${storeId}`;
+        } else if (activeBranch && activeBranch !== 'ALL') {
+          pgConfig.filter = `branch_id=eq.${activeBranch}`;
+        }
         _send({
           topic,
           event: 'phx_join',
           payload: {
             config: {
               broadcast: { self: false },
-              postgres_changes: [{
-                event: '*',
-                schema: 'public',
-                table,
-                filter: `store_id=eq.${storeId}`,
-              }],
+              postgres_changes: [pgConfig],
             },
           },
           ref,
@@ -774,16 +935,28 @@
   const clientInstance = new SupabaseClient();
   clientInstance.getSaleAmount = getSaleAmount;
   clientInstance.categorizePayment = categorizePayment;
+  clientInstance.isSaleExcluded = isSaleExcluded;
+  clientInstance.getSaleCashAmount = getSaleCashAmount;
+  clientInstance.isActualExpense = isActualExpense;
+  clientInstance.isShiftFeed = isShiftFeed;
 
   if (typeof window !== 'undefined') {
     window.SupabaseClient = clientInstance;
     window.getSaleAmount = getSaleAmount;
     window.categorizePayment = categorizePayment;
+    window.isSaleExcluded = isSaleExcluded;
+    window.getSaleCashAmount = getSaleCashAmount;
+    window.isActualExpense = isActualExpense;
+    window.isShiftFeed = isShiftFeed;
   }
   if (typeof module !== 'undefined' && module.exports) {
     module.exports = clientInstance;
     module.exports.SupabaseClient = SupabaseClient;
     module.exports.getSaleAmount = getSaleAmount;
     module.exports.categorizePayment = categorizePayment;
+    module.exports.isSaleExcluded = isSaleExcluded;
+    module.exports.getSaleCashAmount = getSaleCashAmount;
+    module.exports.isActualExpense = isActualExpense;
+    module.exports.isShiftFeed = isShiftFeed;
   }
 })(typeof window !== 'undefined' ? window : globalThis);

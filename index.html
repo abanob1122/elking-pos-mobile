@@ -2,7 +2,7 @@
 <html lang="ar" dir="rtl" class="dark">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <title>ELKing POS - لوحة تحكم صاحب المحل</title>
 
   <!-- PWA & Mobile Meta Tags -->
@@ -43,13 +43,13 @@
     }
   </script>
 
-  <!-- Lucide Icons -->
-  <script src="https://unpkg.com/lucide@latest"></script>
+  <!-- Lucide Icons (Pinned Version) -->
+  <script src="https://unpkg.com/lucide@0.460.0"></script>
 
   <!-- Custom CSS -->
   <link rel="stylesheet" href="./css/app.css">
 </head>
-<body class="bg-slate-100 dark:bg-slate-950 text-slate-900 dark:text-slate-100 min-h-screen flex flex-col antialiased select-none">
+<body class="bg-slate-100 dark:bg-slate-950 text-slate-900 dark:text-slate-100 min-h-screen flex flex-col antialiased">
 
   <!-- ===================================================================== -->
   <!-- Top Application Header -->
@@ -78,24 +78,24 @@
       <div class="flex items-center gap-1.5">
         <!-- Branch Dropdown -->
         <div class="relative">
-          <select id="branchSelect" class="bg-slate-100 dark:bg-slate-800 text-xs font-bold text-slate-800 dark:text-slate-200 rounded-lg px-2.5 py-1.5 border border-slate-200 dark:border-slate-700 outline-none focus:ring-2 focus:ring-blue-500">
+          <select id="branchSelect" class="min-h-[44px] bg-slate-100 dark:bg-slate-800 text-xs font-bold text-slate-800 dark:text-slate-200 rounded-lg px-2.5 py-2 border border-slate-200 dark:border-slate-700 outline-none focus:ring-2 focus:ring-blue-500">
             <option value="ALL">🌐 جميع الفروع</option>
           </select>
         </div>
 
         <!-- Refresh Button -->
-        <button id="refreshBtn" title="تحديث البيانات" class="w-8 h-8 rounded-lg bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 flex items-center justify-center text-slate-700 dark:text-slate-300 transition active:scale-95">
+        <button id="refreshBtn" title="تحديث البيانات" class="min-h-[44px] min-w-[44px] w-11 h-11 rounded-lg bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 flex items-center justify-center text-slate-700 dark:text-slate-300 transition active:scale-95">
           <i data-lucide="rotate-cw" class="w-4 h-4" id="refreshIcon"></i>
         </button>
 
         <!-- Dark / Light Mode Toggle -->
-        <button id="themeToggleBtn" title="تبديل المظهر" class="w-8 h-8 rounded-lg bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 flex items-center justify-center text-amber-500 dark:text-amber-400 transition active:scale-95">
+        <button id="themeToggleBtn" title="تبديل المظهر" class="min-h-[44px] min-w-[44px] w-11 h-11 rounded-lg bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 flex items-center justify-center text-amber-500 dark:text-amber-400 transition active:scale-95">
           <i data-lucide="moon" class="w-4 h-4 hidden dark:block"></i>
           <i data-lucide="sun" class="w-4 h-4 block dark:hidden"></i>
         </button>
 
         <!-- User Profile / Logout -->
-        <button id="userProfileBtn" title="الملف الشخصي والخروج" class="w-8 h-8 rounded-lg bg-blue-50 dark:bg-blue-900/40 hover:bg-blue-100 dark:hover:bg-blue-900/60 flex items-center justify-center text-blue-600 dark:text-blue-400 transition active:scale-95">
+        <button id="userProfileBtn" title="الملف الشخصي والخروج" class="min-h-[44px] min-w-[44px] w-11 h-11 rounded-lg bg-blue-50 dark:bg-blue-900/40 hover:bg-blue-100 dark:hover:bg-blue-900/60 flex items-center justify-center text-blue-600 dark:text-blue-400 transition active:scale-95">
           <i data-lucide="user" class="w-4 h-4"></i>
         </button>
       </div>
@@ -106,6 +106,22 @@
   <!-- Main Content Scroll Area -->
   <!-- ===================================================================== -->
   <main class="flex-1 overflow-y-auto px-4 py-4 pb-24 max-w-lg mx-auto w-full">
+
+    <!-- Connection Error Alert Banner -->
+    <div id="connectionErrorBanner" class="hidden mb-4 bg-rose-600/95 text-white rounded-2xl p-3.5 shadow-lg shadow-rose-500/20 border border-rose-400/30 flex items-center justify-between gap-3" role="alert">
+      <div class="flex items-center gap-2.5">
+        <div class="w-9 h-9 rounded-xl bg-white/20 flex items-center justify-center shrink-0">
+          <i data-lucide="wifi-off" class="w-5 h-5 text-white"></i>
+        </div>
+        <div>
+          <h3 id="connectionErrorTitle" class="text-xs font-black leading-tight">تعذر الاتصال بالخادم السحابي</h3>
+          <p id="connectionErrorLastSync" class="text-[11px] text-rose-100 mt-0.5">آخر تحديث ناجح: لم يتم التحديث بعد</p>
+        </div>
+      </div>
+      <button id="retryConnectionBtn" type="button" class="min-h-[44px] min-w-[44px] px-3 py-1.5 rounded-xl bg-white text-rose-700 font-black text-xs shadow transition active:scale-95 shrink-0">
+        إعادة المحاولة
+      </button>
+    </div>
 
     <!-- PWA Install Banner (Android / Chrome / Edge / iOS) -->
     <div id="pwaInstallBanner" class="hidden mb-4 bg-gradient-to-r from-blue-700 via-indigo-700 to-purple-700 rounded-2xl p-3.5 text-white shadow-lg shadow-blue-500/20 border border-white/10 relative overflow-hidden">
@@ -120,10 +136,10 @@
           </div>
         </div>
         <div class="flex items-center gap-1.5 shrink-0">
-          <button id="pwaInstallBtn" type="button" class="bg-amber-400 hover:bg-amber-300 text-slate-950 font-black text-xs px-3 py-1.5 rounded-xl shadow transition active:scale-95">
+          <button id="pwaInstallBtn" type="button" class="min-h-[44px] min-w-[44px] bg-amber-400 hover:bg-amber-300 text-slate-950 font-black text-xs px-3 py-2 rounded-xl shadow transition active:scale-95">
             تثبيت
           </button>
-          <button id="pwaDismissBannerBtn" type="button" class="w-7 h-7 rounded-lg bg-white/10 hover:bg-white/20 flex items-center justify-center text-white/80 hover:text-white transition">
+          <button id="pwaDismissBannerBtn" type="button" class="min-h-[44px] min-w-[44px] w-11 h-11 rounded-lg bg-white/10 hover:bg-white/20 flex items-center justify-center text-white/80 hover:text-white transition">
             <i data-lucide="x" class="w-4 h-4"></i>
           </button>
         </div>
@@ -391,7 +407,7 @@
 
   <!-- 1. Invoice Details Modal -->
   <div id="invoiceModal" class="modal-overlay fixed inset-0 z-50 bg-black/60 backdrop-blur-sm hidden flex items-center justify-center p-4">
-    <div class="modal-content bg-white dark:bg-slate-900 w-full max-w-md rounded-2xl border border-slate-200 dark:border-slate-800 shadow-2xl overflow-hidden flex flex-col max-h-[85vh]">
+    <div class="modal-content bg-white dark:bg-slate-900 w-full max-w-md rounded-2xl border border-slate-200 dark:border-slate-800 shadow-2xl overflow-hidden flex flex-col max-h-[85vh] overflow-y-auto">
       <!-- Modal Header -->
       <div class="p-4 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between bg-slate-50 dark:bg-slate-800/50">
         <div>
@@ -401,7 +417,7 @@
           </h3>
           <p id="modalInvoiceDate" class="text-[11px] text-slate-400 mt-0.5">---</p>
         </div>
-        <button id="closeInvoiceModalBtn" class="w-7 h-7 rounded-lg bg-slate-200 dark:bg-slate-700 flex items-center justify-center text-slate-600 dark:text-slate-300">
+        <button id="closeInvoiceModalBtn" class="min-h-[44px] min-w-[44px] w-11 h-11 rounded-lg bg-slate-200 dark:bg-slate-700 flex items-center justify-center text-slate-600 dark:text-slate-300">
           <i data-lucide="x" class="w-4 h-4"></i>
         </button>
       </div>
@@ -431,7 +447,7 @@
         <!-- Items Table -->
         <div>
           <h4 class="text-xs font-bold text-slate-700 dark:text-slate-300 mb-2">الأصناف المباعة</h4>
-          <div class="border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden">
+          <div class="border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden overflow-x-auto">
             <table class="w-full text-xs text-right">
               <thead class="bg-slate-100 dark:bg-slate-800/80 text-slate-500 dark:text-slate-400 font-semibold border-b border-slate-200 dark:border-slate-800">
                 <tr>
@@ -473,13 +489,13 @@
 
   <!-- 2. Edit Product Price / MinStock Modal -->
   <div id="productModal" class="modal-overlay fixed inset-0 z-50 bg-black/60 backdrop-blur-sm hidden flex items-center justify-center p-4">
-    <div class="modal-content bg-white dark:bg-slate-900 w-full max-w-sm rounded-2xl border border-slate-200 dark:border-slate-800 shadow-2xl p-4 space-y-4">
+    <div class="modal-content bg-white dark:bg-slate-900 w-full max-w-sm rounded-2xl border border-slate-200 dark:border-slate-800 shadow-2xl p-4 space-y-4 max-h-[85vh] overflow-y-auto">
       <div class="flex items-center justify-between border-b border-slate-200 dark:border-slate-800 pb-2.5">
         <h3 class="text-sm font-black text-slate-900 dark:text-white flex items-center gap-2">
           <i data-lucide="edit-3" class="w-4 h-4 text-blue-500"></i>
           تعديل سعر وبيانات الصنف
         </h3>
-        <button id="closeProductModalBtn" class="w-7 h-7 rounded-lg bg-slate-200 dark:bg-slate-700 flex items-center justify-center text-slate-600 dark:text-slate-300">
+        <button id="closeProductModalBtn" class="min-h-[44px] min-w-[44px] w-11 h-11 rounded-lg bg-slate-200 dark:bg-slate-700 flex items-center justify-center text-slate-600 dark:text-slate-300">
           <i data-lucide="x" class="w-4 h-4"></i>
         </button>
       </div>
@@ -502,10 +518,10 @@
         </div>
 
         <div class="pt-2 flex gap-2">
-          <button type="submit" class="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs py-2.5 rounded-xl shadow-md shadow-blue-500/20 active:scale-95 transition">
+          <button type="submit" class="min-h-[44px] flex-1 bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs py-2.5 rounded-xl shadow-md shadow-blue-500/20 active:scale-95 transition">
             حفظ ومزامنة فورية
           </button>
-          <button type="button" id="cancelProductModalBtn" class="px-4 bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-bold text-xs py-2.5 rounded-xl transition">
+          <button type="button" id="cancelProductModalBtn" class="min-h-[44px] px-4 bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-bold text-xs py-2.5 rounded-xl transition">
             إلغاء
           </button>
         </div>
@@ -515,13 +531,13 @@
 
   <!-- 3. Add Staff Modal -->
   <div id="addStaffModal" class="modal-overlay fixed inset-0 z-50 bg-black/60 backdrop-blur-sm hidden flex items-center justify-center p-4">
-    <div class="modal-content bg-white dark:bg-slate-900 w-full max-w-sm rounded-2xl border border-slate-200 dark:border-slate-800 shadow-2xl p-4 space-y-3.5">
+    <div class="modal-content bg-white dark:bg-slate-900 w-full max-w-sm rounded-2xl border border-slate-200 dark:border-slate-800 shadow-2xl p-4 space-y-3.5 max-h-[85vh] overflow-y-auto">
       <div class="flex items-center justify-between border-b border-slate-200 dark:border-slate-800 pb-2.5">
         <h3 class="text-sm font-black text-slate-900 dark:text-white flex items-center gap-2">
           <i data-lucide="user-plus" class="w-4 h-4 text-emerald-500"></i>
           إضافة موظف جديد
         </h3>
-        <button id="closeAddStaffModalBtn" class="w-7 h-7 rounded-lg bg-slate-200 dark:bg-slate-700 flex items-center justify-center text-slate-600 dark:text-slate-300">
+        <button id="closeAddStaffModalBtn" class="min-h-[44px] min-w-[44px] w-11 h-11 rounded-lg bg-slate-200 dark:bg-slate-700 flex items-center justify-center text-slate-600 dark:text-slate-300">
           <i data-lucide="x" class="w-4 h-4"></i>
         </button>
       </div>
@@ -562,10 +578,10 @@
         </div>
 
         <div class="pt-2 flex gap-2">
-          <button type="submit" class="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs py-2.5 rounded-xl shadow-md shadow-emerald-500/20 active:scale-95 transition">
+          <button type="submit" class="min-h-[44px] flex-1 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs py-2.5 rounded-xl shadow-md shadow-emerald-500/20 active:scale-95 transition">
             إنشاء وتفعيل سحابي
           </button>
-          <button type="button" id="cancelAddStaffModalBtn" class="px-4 bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-bold text-xs py-2.5 rounded-xl transition">
+          <button type="button" id="cancelAddStaffModalBtn" class="min-h-[44px] px-4 bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-bold text-xs py-2.5 rounded-xl transition">
             إلغاء
           </button>
         </div>
@@ -575,13 +591,13 @@
 
   <!-- 4. Change Password Modal -->
   <div id="changePasswordModal" class="modal-overlay fixed inset-0 z-50 bg-black/60 backdrop-blur-sm hidden flex items-center justify-center p-4">
-    <div class="modal-content bg-white dark:bg-slate-900 w-full max-w-sm rounded-2xl border border-slate-200 dark:border-slate-800 shadow-2xl p-4 space-y-3.5">
+    <div class="modal-content bg-white dark:bg-slate-900 w-full max-w-sm rounded-2xl border border-slate-200 dark:border-slate-800 shadow-2xl p-4 space-y-3.5 max-h-[85vh] overflow-y-auto">
       <div class="flex items-center justify-between border-b border-slate-200 dark:border-slate-800 pb-2.5">
         <h3 class="text-sm font-black text-slate-900 dark:text-white flex items-center gap-2">
           <i data-lucide="key" class="w-4 h-4 text-amber-500"></i>
           تغيير كلمة المرور للموظف
         </h3>
-        <button id="closeChangePasswordModalBtn" class="w-7 h-7 rounded-lg bg-slate-200 dark:bg-slate-700 flex items-center justify-center text-slate-600 dark:text-slate-300">
+        <button id="closeChangePasswordModalBtn" class="min-h-[44px] min-w-[44px] w-11 h-11 rounded-lg bg-slate-200 dark:bg-slate-700 flex items-center justify-center text-slate-600 dark:text-slate-300">
           <i data-lucide="x" class="w-4 h-4"></i>
         </button>
       </div>
@@ -599,10 +615,10 @@
         </div>
 
         <div class="pt-2 flex gap-2">
-          <button type="submit" class="flex-1 bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs py-2.5 rounded-xl shadow-md shadow-amber-500/20 active:scale-95 transition">
+          <button type="submit" class="min-h-[44px] flex-1 bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs py-2.5 rounded-xl shadow-md shadow-amber-500/20 active:scale-95 transition">
             حفظ وتشفير PBKDF2
           </button>
-          <button type="button" id="cancelChangePasswordModalBtn" class="px-4 bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-bold text-xs py-2.5 rounded-xl transition">
+          <button type="button" id="cancelChangePasswordModalBtn" class="min-h-[44px] px-4 bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-bold text-xs py-2.5 rounded-xl transition">
             إلغاء
           </button>
         </div>
@@ -612,13 +628,13 @@
 
   <!-- 4.1 iOS Safari PWA Install Modal -->
   <div id="iosInstallModal" class="modal-overlay fixed inset-0 z-50 bg-black/60 backdrop-blur-sm hidden flex items-center justify-center p-4">
-    <div class="modal-content bg-white dark:bg-slate-900 w-full max-w-sm rounded-3xl border border-slate-200 dark:border-slate-800 shadow-2xl p-5 space-y-4">
+    <div class="modal-content bg-white dark:bg-slate-900 w-full max-w-sm rounded-3xl border border-slate-200 dark:border-slate-800 shadow-2xl p-5 space-y-4 max-h-[85vh] overflow-y-auto">
       <div class="flex items-center justify-between border-b border-slate-200 dark:border-slate-800 pb-3">
         <h3 class="text-sm font-black text-slate-900 dark:text-white flex items-center gap-2">
           <i data-lucide="smartphone" class="w-4 h-4 text-blue-500"></i>
           تثبيت التطبيق على آيفون (iOS)
         </h3>
-        <button id="closeIosInstallModalBtn" class="w-7 h-7 rounded-lg bg-slate-200 dark:bg-slate-700 flex items-center justify-center text-slate-600 dark:text-slate-300">
+        <button id="closeIosInstallModalBtn" class="min-h-[44px] min-w-[44px] w-11 h-11 rounded-lg bg-slate-200 dark:bg-slate-700 flex items-center justify-center text-slate-600 dark:text-slate-300">
           <i data-lucide="x" class="w-4 h-4"></i>
         </button>
       </div>
@@ -636,7 +652,7 @@
           <p>اضغط على <strong>"إضافة" (Add)</strong> في الزاوية العلوية ليظهر التطبيق كأيقونة مستقلة على هاتفك.</p>
         </div>
       </div>
-      <button id="okIosInstallModalBtn" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs py-2.5 rounded-xl transition">
+      <button id="okIosInstallModalBtn" class="min-h-[44px] w-full bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs py-2.5 rounded-xl transition">
         فهمت ذلك
       </button>
     </div>
@@ -644,7 +660,7 @@
 
   <!-- 5. Login / Auth Screen Modal -->
   <div id="loginModal" class="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-md hidden flex items-center justify-center p-4">
-    <div class="bg-white dark:bg-slate-900 w-full max-w-sm rounded-3xl border border-slate-200 dark:border-slate-800 shadow-2xl p-6 space-y-5">
+    <div class="modal-content bg-white dark:bg-slate-900 w-full max-w-sm rounded-3xl border border-slate-200 dark:border-slate-800 shadow-2xl p-6 space-y-5 max-h-[85vh] overflow-y-auto">
       <!-- Header / Logo -->
       <div class="text-center space-y-2">
         <div class="w-14 h-14 mx-auto rounded-2xl bg-gradient-to-tr from-amber-500 to-amber-300 flex items-center justify-center text-slate-950 shadow-lg shadow-amber-500/30">

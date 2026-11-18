@@ -16,6 +16,10 @@
   let branchesCache = [];
   let isRefreshing = false;
   let deferredPrompt = null;
+  let lastSuccessfulSyncTime = null;
+  try {
+    lastSuccessfulSyncTime = localStorage.getItem('elking_pwa_last_sync') || null;
+  } catch (_) {}
 
   // Client will be resolved after DOM ready (scripts guaranteed loaded by then)
   let client = null;
@@ -28,8 +32,26 @@
   }
 
   // =========================================================================
-  // Formatting & Utility Helpers
+  // Formatting, Security & Utility Helpers
   // =========================================================================
+  function escapeHtml(str) {
+    if (str === null || str === undefined) return '';
+    return String(str)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
+  function debounce(fn, delay = 350) {
+    let timer = null;
+    return function (...args) {
+      clearTimeout(timer);
+      timer = setTimeout(() => fn.apply(this, args), delay);
+    };
+  }
+
   function formatMoney(amount) {
     const num = Number(amount || 0);
     return num.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' ج.م';
@@ -59,6 +81,114 @@
     if (!isNaN(paid) && paid > 0) return paid;
 
     return 0;
+  }
+
+  function isSaleExcluded(sale) {
+    if (client && typeof client.isSaleExcluded === 'function') {
+      return client.isSaleExcluded(sale);
+    }
+    if (!sale) return true;
+    const st = String(sale.status || '').toLowerCase().trim();
+    return st === 'cancelled' || st === 'voided' || st === 'ملغاة' || st === 'ملغي' || st === 'مرتجع' || sale.is_returned === true;
+  }
+
+  function getSaleCashAmount(sale) {
+    if (client && typeof client.getSaleCashAmount === 'function') {
+      return client.getSaleCashAmount(sale);
+    }
+    if (!sale || isSaleExcluded(sale)) return 0;
+    let splitObj = null;
+    if (sale.split_details) {
+      if (typeof sale.split_details === 'object') {
+        splitObj = sale.split_details;
+      } else if (typeof sale.split_details === 'string') {
+        try { splitObj = JSON.parse(sale.split_details); } catch (_) {}
+      }
+    }
+    const catFn = (client && client.categorizePayment) ? client.categorizePayment : (m => String(m || '').toLowerCase().includes('cash') || String(m || '').includes('كاش') || String(m || '').includes('نقدي') ? 'cash' : 'other');
+    if (splitObj && typeof splitObj === 'object' && Object.keys(splitObj).length > 0) {
+      let cashPart = 0;
+      for (const [k, v] of Object.entries(splitObj)) {
+        const splitAmt = Number(v || 0);
+        if (splitAmt > 0 && catFn(k) === 'cash') {
+          cashPart += splitAmt;
+        }
+      }
+      return cashPart;
+    }
+    return catFn(sale.payment_method) === 'cash' ? getSaleAmount(sale) : 0;
+  }
+
+  function isActualExpense(log) {
+    if (client && typeof client.isActualExpense === 'function') {
+      return client.isActualExpense(log);
+    }
+    if (!log) return false;
+    const type = String(log.trans_type || log.type || '').trim();
+    const cat = String(log.category || '').trim();
+    const notes = String(log.notes || log.note || '').trim();
+    const combined = `${type} ${cat} ${notes}`.toLowerCase();
+    if (
+      type === 'توريد_للخزينة' || type === 'توريد للخزينة' ||
+      type === 'تغذية_وردية' || type === 'تغذية وردية' ||
+      combined.includes('توريد_للخزينة') || combined.includes('توريد للخزينة') ||
+      combined.includes('تغذية_وردية') || combined.includes('تغذية وردية') ||
+      type === 'إيداع' || type === 'ايداع' || type === 'وارد'
+    ) {
+      return false;
+    }
+    const allowedExpenseTypes = ['مصروف', 'مصروفات', 'مصروف عام', 'مصروفات وردية', 'صرف', 'expense'];
+    const typeLower = type.toLowerCase();
+    const catLower = cat.toLowerCase();
+    return allowedExpenseTypes.includes(typeLower) ||
+           allowedExpenseTypes.includes(catLower) ||
+           typeLower.includes('مصروف') ||
+           catLower.includes('مصروف');
+  }
+
+  function isShiftFeed(log) {
+    if (client && typeof client.isShiftFeed === 'function') {
+      return client.isShiftFeed(log);
+    }
+    if (!log) return false;
+    const type = String(log.trans_type || log.type || '').trim();
+    const cat = String(log.category || '').trim();
+    const combined = `${type} ${cat}`.toLowerCase();
+    return type === 'تغذية_وردية' || type === 'تغذية وردية' || combined.includes('تغذية_وردية') || combined.includes('تغذية وردية');
+  }
+
+  function updateConnectionBanner(isError, errMsg = '') {
+    const banner = el('connectionErrorBanner');
+    const titleEl = el('connectionErrorTitle');
+    const lastSyncEl = el('connectionErrorLastSync');
+    const statusText = el('cloudStatusText');
+
+    if (!isError) {
+      lastSuccessfulSyncTime = new Date().toISOString();
+      try {
+        localStorage.setItem('elking_pwa_last_sync', lastSuccessfulSyncTime);
+      } catch (_) {}
+      if (banner) banner.classList.add('hidden');
+      if (statusText) {
+        statusText.textContent = 'سحابي متصل';
+        statusText.classList.remove('text-rose-600', 'dark:text-rose-400');
+        statusText.classList.add('text-emerald-600', 'dark:text-emerald-400');
+      }
+    } else {
+      if (banner) banner.classList.remove('hidden');
+      if (titleEl) {
+        titleEl.textContent = errMsg ? `تعذر الاتصال بالخادم السحابي (${errMsg})` : 'تعذر الاتصال بالخادم السحابي';
+      }
+      if (lastSyncEl) {
+        const syncFormatted = lastSuccessfulSyncTime ? formatDateTime(lastSuccessfulSyncTime) : 'لم يتم التحديث بعد';
+        lastSyncEl.textContent = `آخر تحديث ناجح: ${syncFormatted}`;
+      }
+      if (statusText) {
+        statusText.textContent = 'غير متصل';
+        statusText.classList.remove('text-emerald-600', 'dark:text-emerald-400');
+        statusText.classList.add('text-rose-600', 'dark:text-rose-400');
+      }
+    }
   }
 
   function formatDateTime(isoString) {
@@ -392,7 +522,7 @@
       for (const b of branchesCache) {
         const isSelected = b.id === activeBranch ? 'selected' : '';
         const mainBadge = b.is_main ? ' (الرئيسي)' : '';
-        optionsHtml += `<option value="${b.id}" ${isSelected}>🏢 ${b.name}${mainBadge}</option>`;
+        optionsHtml += `<option value="${escapeHtml(b.id)}" ${isSelected}>🏢 ${escapeHtml(b.name)}${mainBadge}</option>`;
       }
 
       branchSelect.innerHTML = optionsHtml;
@@ -402,7 +532,7 @@
       if (staffBranchSelect) {
         let staffOpts = `<option value="">بدون تعيين فرع محدد</option>`;
         for (const b of branchesCache) {
-          staffOpts += `<option value="${b.id}">${b.name}</option>`;
+          staffOpts += `<option value="${escapeHtml(b.id)}">${escapeHtml(b.name)}</option>`;
         }
         staffBranchSelect.innerHTML = staffOpts;
       }
@@ -537,6 +667,13 @@
         refreshCurrentTab(true);
       });
     }
+
+    const retryConnectionBtn = el('retryConnectionBtn');
+    if (retryConnectionBtn) {
+      retryConnectionBtn.addEventListener('click', () => {
+        refreshCurrentTab(true);
+      });
+    }
   }
 
   function switchTab(tabId) {
@@ -596,11 +733,13 @@
           await renderStaff();
           break;
       }
+      updateConnectionBanner(false);
       if (showToastOnDone) {
         showToast('تم تحديث البيانات لحظياً');
       }
     } catch (err) {
       console.error('Refresh error:', err);
+      updateConnectionBanner(true, err.message || 'خطأ في الشبكة');
       showToast(err.message || 'حدث خطأ أثناء جلب البيانات', true);
     } finally {
       isRefreshing = false;
@@ -615,7 +754,14 @@
   // VIEW 1: DASHBOARD
   // =========================================================================
   async function renderDashboard(branchId) {
-    const kpis = await client.getDashboardKPIs(branchId);
+    let kpis;
+    try {
+      kpis = await client.getDashboardKPIs(branchId);
+      updateConnectionBanner(false);
+    } catch (err) {
+      updateConnectionBanner(true, err.message || 'انقطاع الاتصال');
+      throw err;
+    }
 
     // KPI Numbers
     const setEl = (id, val) => { const e = el(id); if (e) e.textContent = val; };
@@ -624,7 +770,7 @@
     setEl('kpiCashInHand', formatMoney(kpis.netCashInHand));
     setEl('kpiTotalExpenses', formatMoney(kpis.totalExpenses));
     setEl('kpiCardSales', formatMoney(kpis.cardSales));
-    setEl('kpiInstapaySales', formatMoney(kpis.instapaySales));
+    setEl('kpiInstapaySales', formatMoney(kpis.instapaySales + (kpis.walletSales || 0)));
 
     // Active Shifts
     const shiftsListEl = el('activeShiftsList');
@@ -644,8 +790,8 @@
                 <i data-lucide="user-check" class="w-4 h-4"></i>
               </div>
               <div>
-                <h4 class="text-xs font-bold text-slate-900 dark:text-white">${s.cashier_name || s.username || 'كاشير'}</h4>
-                <p class="text-[10px] text-slate-400">بدأت: ${formatDateTime(s.start_time)} • ${getBranchName(s.branch_id)}</p>
+                <h4 class="text-xs font-bold text-slate-900 dark:text-white">${escapeHtml(s.cashier_name || s.username || 'كاشير')}</h4>
+                <p class="text-[10px] text-slate-400">بدأت: ${escapeHtml(formatDateTime(s.start_time))} • ${escapeHtml(getBranchName(s.branch_id))}</p>
               </div>
             </div>
             <div class="text-left">
@@ -666,12 +812,12 @@
         lowStockListEl.innerHTML = kpis.lowStockItems.map(item => `
           <div class="bg-slate-50 dark:bg-slate-800/50 p-2.5 rounded-xl border border-rose-200/50 dark:border-rose-900/40 flex items-center justify-between">
             <div>
-              <h5 class="text-xs font-bold text-slate-900 dark:text-white">${item.name}</h5>
-              <p class="text-[10px] text-slate-400 num-ltr">${item.barcode || 'بدون باركود'}</p>
+              <h5 class="text-xs font-bold text-slate-900 dark:text-white">${escapeHtml(item.product_name || item.name || 'صنف')}</h5>
+              <p class="text-[10px] text-slate-400 num-ltr">${escapeHtml(item.barcode || 'بدون باركود')}</p>
             </div>
             <div class="flex items-center gap-2">
               <span class="text-xs font-bold text-rose-600 dark:text-rose-400 bg-rose-500/10 px-2 py-0.5 rounded-md">
-                متبقي ${item.stock} فقط
+                متبقي ${escapeHtml(item.stock)} فقط
               </span>
             </div>
           </div>
@@ -723,6 +869,7 @@
     listEl.innerHTML = sales.map(s => {
       const total = getSaleAmount(s);
       const method = s.payment_method || 'نقدي';
+      const excluded = isSaleExcluded(s);
       let methodBadge = 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400';
       if (method.toLowerCase().includes('card') || method.includes('فيزا')) {
         methodBadge = 'bg-purple-500/10 text-purple-600 dark:text-purple-400';
@@ -730,19 +877,23 @@
         methodBadge = 'bg-cyan-500/10 text-cyan-600 dark:text-cyan-400';
       }
 
+      const rawId = String(s.id || '');
+      const invoiceLabel = s.invoice_no || rawId.substring(0, 8);
+
       return `
-        <div class="invoice-card bg-white dark:bg-slate-900 p-3.5 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm hover:border-blue-400 transition cursor-pointer active:scale-[0.99]" data-id="${s.id}">
+        <div class="invoice-card bg-white dark:bg-slate-900 p-3.5 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm hover:border-blue-400 transition cursor-pointer active:scale-[0.99]" data-id="${escapeHtml(rawId)}">
           <div class="flex items-center justify-between">
             <div class="flex items-center gap-2">
-              <span class="text-xs font-black font-mono text-blue-600 dark:text-blue-400 num-ltr">#${s.invoice_no || s.id.substring(0, 8)}</span>
-              <span class="text-[10px] font-bold px-2 py-0.5 rounded-full ${methodBadge}">${method}</span>
+              <span class="text-xs font-black font-mono text-blue-600 dark:text-blue-400 num-ltr">#${escapeHtml(invoiceLabel)}</span>
+              <span class="text-[10px] font-bold px-2 py-0.5 rounded-full ${methodBadge}">${escapeHtml(method)}</span>
+              ${excluded ? `<span class="text-[10px] font-bold px-2 py-0.5 rounded-full bg-rose-500/10 text-rose-600 dark:text-rose-400">مرتجع/ملغاة</span>` : ''}
             </div>
-            <span class="text-sm font-black text-slate-900 dark:text-white num-ltr">${formatMoney(total)}</span>
+            <span class="text-sm font-black ${excluded ? 'line-through text-slate-400' : 'text-slate-900 dark:text-white'} num-ltr">${formatMoney(total)}</span>
           </div>
 
           <div class="flex items-center justify-between mt-2 pt-2 border-t border-slate-100 dark:border-slate-800/80 text-[11px] text-slate-400">
-            <span>الكاشير: <strong class="text-slate-700 dark:text-slate-300">${s.cashier_username || s.cashier_name || 'كاشير'}</strong></span>
-            <span>${formatDateTime(s.sale_date || s.created_at)}</span>
+            <span>الكاشير: <strong class="text-slate-700 dark:text-slate-300">${escapeHtml(s.cashier_username || s.cashier_name || 'كاشير')}</strong></span>
+            <span>${escapeHtml(formatDateTime(s.sale_date || s.created_at))}</span>
           </div>
         </div>
       `;
@@ -765,7 +916,7 @@
     if (!invoiceModal) return;
 
     const setEl = (id, val) => { const e = el(id); if (e) e.textContent = val; };
-    setEl('modalInvoiceNo', `#${sale.invoice_no || sale.id.substring(0, 8)}`);
+    setEl('modalInvoiceNo', `#${sale.invoice_no || String(sale.id || '').substring(0, 8)}`);
     setEl('modalInvoiceDate', formatDateTime(sale.sale_date || sale.created_at));
     setEl('modalCashierName', sale.cashier_username || sale.cashier_name || 'كاشير');
     setEl('modalCustomerName', sale.customer_name || 'عميل نقدي');
@@ -799,10 +950,10 @@
         tbody.innerHTML = items.map(item => `
           <tr class="hover:bg-slate-50 dark:hover:bg-slate-800/40">
             <td class="p-2 font-semibold text-slate-800 dark:text-slate-200">
-              ${item.product_name || 'صنف'}
-              <span class="block text-[10px] text-slate-400 num-ltr">${item.barcode_ean13 || item.barcode || ''}</span>
+              ${escapeHtml(item.product_name || item.name || 'صنف')}
+              <span class="block text-[10px] text-slate-400 num-ltr">${escapeHtml(item.barcode_ean13 || item.barcode || '')}</span>
             </td>
-            <td class="p-2 text-center font-bold">${item.quantity ?? item.qty ?? 1}</td>
+            <td class="p-2 text-center font-bold">${escapeHtml(item.quantity ?? item.qty ?? 1)}</td>
             <td class="p-2 text-center num-ltr">${formatMoney(item.unit_price || 0)}</td>
             <td class="p-2 text-left font-bold num-ltr">${formatMoney(item.total_price || 0)}</td>
           </tr>
@@ -810,7 +961,7 @@
       }
     } catch (err) {
       if (tbody) {
-        tbody.innerHTML = `<tr><td colspan="4" class="p-3 text-center text-rose-500">تعذر تحميل الأصناف: ${err.message}</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="4" class="p-3 text-center text-rose-500">تعذر تحميل الأصناف: ${escapeHtml(err.message)}</td></tr>`;
       }
     }
   }
@@ -826,7 +977,7 @@
       branchId,
       search,
       lowStockOnly,
-      limit: 100,
+      limit: lowStockOnly ? 5000 : 100,
     });
 
     const badgeEl = el('inventoryCountBadge');
@@ -860,11 +1011,11 @@
         <div class="bg-white dark:bg-slate-900 p-3.5 rounded-2xl border ${isLow ? 'border-amber-300 dark:border-amber-900/60' : 'border-slate-200 dark:border-slate-800'} shadow-sm flex flex-col justify-between gap-2.5">
           <div class="flex items-start justify-between gap-2">
             <div>
-              <h4 class="text-xs font-bold text-slate-900 dark:text-white">${name}</h4>
-              <p class="text-[11px] text-slate-400 num-ltr font-mono mt-0.5">${barcode}</p>
+              <h4 class="text-xs font-bold text-slate-900 dark:text-white">${escapeHtml(name)}</h4>
+              <p class="text-[11px] text-slate-400 num-ltr font-mono mt-0.5">${escapeHtml(barcode)}</p>
             </div>
             <span class="text-xs font-bold px-2.5 py-0.5 rounded-full ${isLow ? 'bg-rose-500/10 text-rose-600 dark:text-rose-400' : 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'}">
-              ${stock} في المخزن
+              ${escapeHtml(stock)} في المخزن
             </span>
           </div>
 
@@ -874,9 +1025,9 @@
               <span class="text-slate-400 text-[11px]">التكلفة: <strong class="num-ltr">${formatMoney(costPrice)}</strong></span>
             </div>
 
-            <button class="edit-product-btn bg-slate-100 dark:bg-slate-800 hover:bg-blue-50 dark:hover:bg-blue-900/30 text-blue-600 dark:text-blue-400 font-bold text-[11px] px-2.5 py-1 rounded-lg border border-slate-200 dark:border-slate-700 flex items-center gap-1 active:scale-95 transition"
-              data-id="${p.id}" data-name="${encodeURIComponent(name)}" data-price="${salePrice}" data-min="${minStock}">
-              <i data-lucide="edit-2" class="w-3 h-3"></i>
+            <button class="edit-product-btn min-h-[44px] min-w-[44px] bg-slate-100 dark:bg-slate-800 hover:bg-blue-50 dark:hover:bg-blue-900/30 text-blue-600 dark:text-blue-400 font-bold text-[11px] px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-700 flex items-center gap-1 active:scale-95 transition"
+              data-id="${escapeHtml(p.id)}" data-name="${encodeURIComponent(name)}" data-price="${escapeHtml(salePrice)}" data-min="${escapeHtml(minStock)}">
+              <i data-lucide="edit-2" class="w-3.5 h-3.5"></i>
               <span>تعديل السعر</span>
             </button>
           </div>
@@ -934,28 +1085,51 @@
     }
 
     listEl.innerHTML = logs.map(l => {
-      const type = (l.type || l.trans_type || 'صرف').toLowerCase();
-      const isExpense = type.includes('exp') || type.includes('صرف') || type.includes('سحب') || type.includes('مصروف');
-      const amount = Number(l.amount || 0);
+      const shiftFeed = isShiftFeed(l);
+      const actualExpense = isActualExpense(l);
+      const isOutflow = actualExpense || shiftFeed;
+      const amount = Math.abs(Number(l.amount || 0));
+
+      let defaultTitle = 'توريد للخزينة';
+      let badgeLabel = 'وارد';
+      let colorClasses = 'bg-emerald-500/10 text-emerald-500';
+      let amountColor = 'text-emerald-600 dark:text-emerald-400';
+
+      if (shiftFeed) {
+        defaultTitle = 'تغذية وردية (صادر من الخزينة)';
+        badgeLabel = 'صادر - تغذية وردية';
+        colorClasses = 'bg-amber-500/10 text-amber-500';
+        amountColor = 'text-amber-600 dark:text-amber-400';
+      } else if (actualExpense) {
+        defaultTitle = 'مصروف عام';
+        badgeLabel = 'مصروف';
+        colorClasses = 'bg-rose-500/10 text-rose-500';
+        amountColor = 'text-rose-600 dark:text-rose-400';
+      }
+
+      const titleText = l.notes || l.note || l.category || defaultTitle;
 
       return `
         <div class="bg-white dark:bg-slate-900 p-3.5 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm flex items-center justify-between">
           <div class="flex items-center gap-3">
-            <div class="w-9 h-9 rounded-xl ${isExpense ? 'bg-rose-500/10 text-rose-500' : 'bg-emerald-500/10 text-emerald-500'} flex items-center justify-center font-bold text-xs">
-              <i data-lucide="${isExpense ? 'arrow-down-left' : 'arrow-up-right'}" class="w-4 h-4"></i>
+            <div class="w-9 h-9 rounded-xl ${colorClasses} flex items-center justify-center font-bold text-xs">
+              <i data-lucide="${isOutflow ? 'arrow-down-left' : 'arrow-up-right'}" class="w-4 h-4"></i>
             </div>
             <div>
-              <h4 class="text-xs font-bold text-slate-900 dark:text-white">${l.notes || l.note || l.category || (isExpense ? 'مصروف عام' : 'إيداع')}</h4>
+              <div class="flex items-center gap-1.5">
+                <h4 class="text-xs font-bold text-slate-900 dark:text-white">${escapeHtml(titleText)}</h4>
+                <span class="text-[9px] font-bold px-1.5 py-0.5 rounded ${colorClasses}">${escapeHtml(badgeLabel)}</span>
+              </div>
               <p class="text-[10px] text-slate-400 mt-0.5">
-                ${formatDateTime(l.created_at)} • المسؤول: ${l.username || 'كاشير'}
+                ${escapeHtml(formatDateTime(l.created_at))} • المسؤول: ${escapeHtml(l.username || 'كاشير')}
               </p>
             </div>
           </div>
           <div class="text-left">
-            <span class="text-xs font-black ${isExpense ? 'text-rose-600 dark:text-rose-400' : 'text-emerald-600 dark:text-emerald-400'} num-ltr">
-              ${isExpense ? '-' : '+'} ${formatMoney(amount)}
+            <span class="text-xs font-black ${amountColor} num-ltr">
+              ${isOutflow ? '-' : '+'} ${formatMoney(amount)}
             </span>
-            <span class="block text-[9px] text-slate-400 font-medium">${l.payment_method || 'نقدي'}</span>
+            <span class="block text-[9px] text-slate-400 font-medium">${escapeHtml(l.payment_method || 'نقدي')}</span>
           </div>
         </div>
       `;
@@ -963,11 +1137,20 @@
   }
 
   async function renderShiftsLogs(branchId) {
-    const [shifts, recentSales, todayExpenses] = await Promise.all([
+    const [shiftsRes, salesRes, logsRes] = await Promise.allSettled([
       client.getShifts({ branchId, limit: 30 }),
-      client.getSales({ branchId, limit: 100 }).catch(() => []),
-      client.getTreasuryLogs({ branchId, limit: 100 }).catch(() => [])
+      client.getSales({ branchId, limit: 100 }),
+      client.getTreasuryLogs({ branchId, limit: 100 }),
     ]);
+
+    if (shiftsRes.status === 'rejected') {
+      throw shiftsRes.reason;
+    }
+
+    const shifts = shiftsRes.value || [];
+    const recentSales = salesRes.status === 'fulfilled' ? (salesRes.value || []) : [];
+    const todayLogs = logsRes.status === 'fulfilled' ? (logsRes.value || []) : [];
+
     const listEl = el('shiftsLogsList');
     if (!listEl) return;
 
@@ -983,7 +1166,8 @@
 
     listEl.innerHTML = shifts.map(s => {
       const isOpen = !s.end_time || String(s.status).toLowerCase() === 'open' || String(s.status).includes('مفتوح');
-      const startingCash = Number(s.starting_cash ?? s.opening_cash ?? 0);
+      const openingCash = Number(s.opening_cash ?? s.starting_cash ?? 0);
+      const cashReturns = Number(s.cash_returns || 0);
       let sales = Number(s.total_sales || 0);
       let cashSales = Number(s.cash_sales || 0);
       let expenses = Number(s.expenses || 0);
@@ -997,6 +1181,7 @@
         let realTimeSales = 0;
         let realTimeCash = 0;
         for (const sale of (recentSales || [])) {
+          if (isSaleExcluded(sale)) continue;
           const saleTime = new Date(sale.sale_date || sale.created_at).getTime();
           const saleUser = String(sale.cashier_username || sale.cashier_name || '').toLowerCase().trim();
           const saleShiftId = Number(sale.local_shift_id || sale.shift_id || 0);
@@ -1006,16 +1191,16 @@
           if (matches) {
             const amt = getSaleAmount(sale);
             realTimeSales += amt;
-            const cat = client.categorizePayment ? client.categorizePayment(sale.payment_method) : 'cash';
-            if (cat === 'cash') realTimeCash += amt;
+            realTimeCash += getSaleCashAmount(sale);
           }
         }
         sales = Math.max(sales, realTimeSales);
         cashSales = Math.max(cashSales, realTimeCash);
 
-        // حساب مصروفات الوردية إن لم تكن مسجلة بالسحابة
-        if (expenses <= 0 && todayExpenses && todayExpenses.length > 0) {
-          for (const exp of todayExpenses) {
+        // حساب مصروفات الوردية الفعلية فقط (استبعاد توريد_للخزينة وتغذية_وردية) إن لم تكن مسجلة بالسحابة
+        if (expenses <= 0 && todayLogs && todayLogs.length > 0) {
+          for (const exp of todayLogs) {
+            if (!isActualExpense(exp)) continue;
             const expTime = new Date(exp.created_at).getTime();
             const expShift = Number(exp.shift_id || 0);
             if ((sLocalId > 0 && expShift === sLocalId) || (expTime >= sStart)) {
@@ -1027,7 +1212,7 @@
 
       const drawerCashLabel = isOpen ? 'المتوقع بالدرج:' : 'الفعلي بالدرج:';
       const drawerCashVal = isOpen
-        ? (startingCash + cashSales - expenses)
+        ? (openingCash + cashSales - cashReturns - expenses)
         : Number(s.actual_cash ?? s.closing_cash ?? 0);
       const variance = Number(s.handover_variance ?? 0);
 
@@ -1035,7 +1220,7 @@
         <div class="bg-white dark:bg-slate-900 p-3.5 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm space-y-2.5">
           <div class="flex items-center justify-between">
             <div class="flex items-center gap-2">
-              <span class="text-xs font-black text-slate-900 dark:text-white">${s.cashier_name || s.username || 'كاشير'}</span>
+              <span class="text-xs font-black text-slate-900 dark:text-white">${escapeHtml(s.cashier_name || s.username || 'كاشير')}</span>
               <span class="text-[10px] font-bold px-2 py-0.5 rounded-full ${isOpen ? 'bg-emerald-500/10 text-emerald-600 animate-pulse' : 'bg-slate-100 dark:bg-slate-800 text-slate-500'}">
                 ${isOpen ? '🟢 جارية حالياً' : 'مغلقة'}
               </span>
@@ -1044,9 +1229,9 @@
           </div>
 
           <div class="grid grid-cols-2 gap-2 text-[11px] bg-slate-50 dark:bg-slate-800/40 p-2.5 rounded-xl text-slate-500 dark:text-slate-400">
-            <div>البدء: <strong class="text-slate-700 dark:text-slate-300">${formatDateTime(s.start_time)}</strong></div>
-            <div>الإغلاق: <strong class="text-slate-700 dark:text-slate-300">${s.end_time ? formatDateTime(s.end_time) : 'مفتوحة'}</strong></div>
-            <div>رصيد الافتتاح: <strong class="text-slate-700 dark:text-slate-300 num-ltr">${formatMoney(startingCash)}</strong></div>
+            <div>البدء: <strong class="text-slate-700 dark:text-slate-300">${escapeHtml(formatDateTime(s.start_time))}</strong></div>
+            <div>الإغلاق: <strong class="text-slate-700 dark:text-slate-300">${escapeHtml(s.end_time ? formatDateTime(s.end_time) : 'مفتوحة')}</strong></div>
+            <div>رصيد الافتتاح: <strong class="text-slate-700 dark:text-slate-300 num-ltr">${formatMoney(openingCash)}</strong></div>
             <div>${drawerCashLabel} <strong class="text-slate-700 dark:text-slate-300 num-ltr">${formatMoney(drawerCashVal)}</strong></div>
           </div>
 
@@ -1083,43 +1268,44 @@
       const isActive = Boolean(u.is_active);
       const role = u.role || 'Cashier';
       const branchName = getBranchName(u.branch_id);
+      const initialChar = (u.full_name || u.username || 'م').substring(0, 1);
 
       return `
         <div class="bg-white dark:bg-slate-900 p-3.5 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm flex items-center justify-between gap-3">
           <div class="flex items-center gap-3">
             <div class="w-10 h-10 rounded-xl ${isActive ? 'bg-blue-500/10 text-blue-500' : 'bg-slate-200 dark:bg-slate-800 text-slate-400'} flex items-center justify-center font-black text-sm">
-              ${(u.full_name || u.username || 'م').substring(0, 1)}
+              ${escapeHtml(initialChar)}
             </div>
             <div>
               <div class="flex items-center gap-2">
-                <h4 class="text-xs font-bold text-slate-900 dark:text-white">${u.full_name || u.username}</h4>
-                <span class="text-[9px] bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 font-bold px-1.5 py-0.5 rounded">${role}</span>
+                <h4 class="text-xs font-bold text-slate-900 dark:text-white">${escapeHtml(u.full_name || u.username)}</h4>
+                <span class="text-[9px] bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 font-bold px-1.5 py-0.5 rounded">${escapeHtml(role)}</span>
               </div>
               <p class="text-[10px] text-slate-400 mt-0.5">
-                <span class="font-mono">@${u.username}</span> • ${branchName}
+                <span class="font-mono">@${escapeHtml(u.username)}</span> • ${escapeHtml(branchName)}
               </p>
             </div>
           </div>
 
-          <!-- Actions & Toggle -->
-          <div class="flex items-center gap-2">
+          <!-- Actions & Toggle (gap-3 = 12px touch spacing, min 44x44px targets) -->
+          <div class="flex items-center gap-3">
             <!-- Active Toggle Button -->
-            <button class="toggle-staff-btn text-xs font-bold px-2.5 py-1 rounded-xl transition flex items-center gap-1 active:scale-95 ${isActive ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20' : 'bg-rose-500/10 text-rose-600 dark:text-rose-400 border border-rose-500/20'}"
-              data-id="${u.id}" data-active="${isActive}">
+            <button class="toggle-staff-btn min-h-[44px] min-w-[44px] text-xs font-bold px-3 py-2 rounded-xl transition flex items-center gap-1.5 active:scale-95 ${isActive ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20' : 'bg-rose-500/10 text-rose-600 dark:text-rose-400 border border-rose-500/20'}"
+              data-id="${escapeHtml(u.id)}" data-active="${isActive}">
               <span class="w-1.5 h-1.5 rounded-full ${isActive ? 'bg-emerald-500' : 'bg-rose-500'}"></span>
               <span>${isActive ? 'نشط' : 'معطّل'}</span>
             </button>
 
             <!-- Change Password Button -->
-            <button class="change-pwd-btn w-8 h-8 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 flex items-center justify-center text-slate-600 dark:text-slate-300 active:scale-95 transition"
-              data-id="${u.id}" data-name="${encodeURIComponent(u.full_name || u.username)}" title="تغيير كلمة المرور">
-              <i data-lucide="key" class="w-3.5 h-3.5"></i>
+            <button class="change-pwd-btn min-h-[44px] min-w-[44px] w-11 h-11 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 flex items-center justify-center text-slate-600 dark:text-slate-300 active:scale-95 transition"
+              data-id="${escapeHtml(u.id)}" data-name="${encodeURIComponent(u.full_name || u.username)}" title="تغيير كلمة المرور">
+              <i data-lucide="key" class="w-4 h-4"></i>
             </button>
 
             <!-- Delete Button -->
-            <button class="delete-staff-btn w-8 h-8 rounded-xl bg-rose-50 dark:bg-rose-950/40 hover:bg-rose-100 dark:hover:bg-rose-900/60 flex items-center justify-center text-rose-500 active:scale-95 transition"
-              data-id="${u.id}" data-username="${u.username}" title="حذف الموظف">
-              <i data-lucide="trash-2" class="w-3.5 h-3.5"></i>
+            <button class="delete-staff-btn min-h-[44px] min-w-[44px] w-11 h-11 rounded-xl bg-rose-50 dark:bg-rose-950/40 hover:bg-rose-100 dark:hover:bg-rose-900/60 flex items-center justify-center text-rose-500 active:scale-95 transition"
+              data-id="${escapeHtml(u.id)}" data-username="${escapeHtml(u.username)}" title="حذف الموظف">
+              <i data-lucide="trash-2" class="w-4 h-4"></i>
             </button>
           </div>
         </div>
@@ -1308,13 +1494,16 @@
       });
     }
 
-    // Filter listeners for Sales & Inventory
-    el('salesSearchInput')?.addEventListener('input', () => renderSales(client.getActiveBranch()));
+    // Filter listeners for Sales & Inventory with 350ms debounce on search inputs
+    const debouncedRenderSales = debounce(() => renderSales(client.getActiveBranch()), 350);
+    const debouncedRenderInventory = debounce(() => renderInventory(client.getActiveBranch()), 350);
+
+    el('salesSearchInput')?.addEventListener('input', debouncedRenderSales);
     el('salesDateFilter')?.addEventListener('change', () => renderSales(client.getActiveBranch()));
     el('salesDateInput')?.addEventListener('change', () => renderSales(client.getActiveBranch()));
     el('salesPaymentFilter')?.addEventListener('change', () => renderSales(client.getActiveBranch()));
 
-    el('inventorySearchInput')?.addEventListener('input', () => renderInventory(client.getActiveBranch()));
+    el('inventorySearchInput')?.addEventListener('input', debouncedRenderInventory);
     el('lowStockOnlyToggle')?.addEventListener('change', () => renderInventory(client.getActiveBranch()));
 
     // "عرض الكل" button on Dashboard Low Stock card -> switch to Inventory with low stock on
@@ -1323,6 +1512,35 @@
       if (toggle) toggle.checked = true;
       switchTab('inventory');
     });
+  }
+
+  // =========================================================================
+  // Virtual Keyboard Focus Handling (scrollIntoView)
+  // =========================================================================
+  function setupVirtualKeyboardScroll() {
+    document.addEventListener('focusin', (e) => {
+      const target = e.target;
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT')) {
+        setTimeout(() => {
+          try {
+            target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          } catch (_) {}
+        }, 250);
+      }
+    });
+
+    if (window.visualViewport) {
+      window.visualViewport.addEventListener('resize', () => {
+        const active = document.activeElement;
+        if (active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || active.tagName === 'SELECT')) {
+          setTimeout(() => {
+            try {
+              active.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            } catch (_) {}
+          }, 100);
+        }
+      });
+    }
   }
 
   // =========================================================================
@@ -1379,7 +1597,7 @@
       const session = client.session;
       if (!session || !session.username) return;
       const rows = await client.request(
-        `/staff_users?store_id=eq.${client.config.storeId}&username=eq.${session.username}&select=is_active,is_deleted`
+        `/staff_users?store_id=eq.${client.config.storeId}&username=eq.${encodeURIComponent(session.username)}&select=is_active,is_deleted`
       );
       if (!rows || rows.length === 0) return;
       const u = rows[0];
@@ -1398,11 +1616,14 @@
   // =========================================================================
   async function loadInitialAppData() {
     try {
-      await loadBranches();
-      const store = await client.getStoreInfo();
+      const [, storeRes] = await Promise.allSettled([
+        loadBranches(),
+        client.getStoreInfo(),
+      ]);
+      const store = storeRes.status === 'fulfilled' ? storeRes.value : null;
       const headerStoreName = el('headerStoreName');
       if (store && headerStoreName) {
-        headerStoreName.textContent = store.store_name || 'متجر إلكينج';
+        headerStoreName.textContent = store.name || store.store_name || 'متجر إلكينج';
       }
       await refreshCurrentTab();
       // تفعيل الاشتراك اللحظي Realtime بعد تحميل البيانات الأولية
@@ -1431,6 +1652,7 @@
     try { setupAuthEvents(); } catch (e) { console.debug('setupAuthEvents error:', e); }
     try { setupNavigation(); } catch (e) { console.debug('setupNavigation error:', e); }
     try { setupModalsAndForms(); } catch (e) { console.debug('setupModalsAndForms error:', e); }
+    try { setupVirtualKeyboardScroll(); } catch (e) { console.debug('setupVirtualKeyboardScroll error:', e); }
     try { setupPwaInstall(); } catch (e) { console.debug('setupPwaInstall error:', e); }
     try { triggerIcons(); } catch (e) { console.debug('triggerIcons error:', e); }
     try { checkAuth(); } catch (e) { console.debug('checkAuth error:', e); }
