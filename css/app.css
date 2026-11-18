@@ -32,6 +32,27 @@ button, .edit-product-btn, .toggle-staff-btn, .change-pwd-btn, .delete-staff-btn
   min-width: 44px;
 }
 
+/* Header Action Buttons (40x40px balanced size for mobile screens >= 320px) */
+.header-action-btn {
+  width: 40px !important;
+  height: 40px !important;
+  min-width: 40px !important;
+  min-height: 40px !important;
+  max-width: 40px !important;
+  max-height: 40px !important;
+  padding: 0 !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  flex-shrink: 0 !important;
+}
+
+/* Branch Filter Dropdown (Row 2 full-width styling) */
+#branchFilter, #branchSelect {
+  min-height: 40px !important;
+  height: 40px !important;
+}
+
 .nav-tab-btn {
   min-height: 44px;
   min-width: 0 !important;

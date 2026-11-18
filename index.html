@@ -55,49 +55,58 @@
   <!-- Top Application Header -->
   <!-- ===================================================================== -->
   <header class="sticky top-0 z-30 bg-white/95 dark:bg-slate-900/95 backdrop-blur border-b border-slate-200 dark:border-slate-800 shadow-sm pt-safe">
-    <div class="px-4 py-2.5 flex items-center justify-between gap-2">
-      <!-- Logo & Store Title -->
-      <div class="flex items-center gap-2">
-        <div class="w-9 h-9 rounded-xl bg-gradient-to-tr from-amber-500 to-amber-300 flex items-center justify-center text-slate-950 shadow-md shadow-amber-500/20">
-          <i data-lucide="crown" class="w-5 h-5"></i>
-        </div>
-        <div>
-          <h1 class="text-sm font-black tracking-wide flex items-center gap-1.5 text-slate-900 dark:text-white">
-            ELKing POS
-            <span class="text-[10px] bg-amber-500/10 text-amber-600 dark:text-amber-400 font-semibold px-1.5 py-0.5 rounded border border-amber-500/20">صاحب المحل</span>
-          </h1>
-          <div class="flex items-center gap-1.5 text-[11px] text-slate-500 dark:text-slate-400">
-            <span id="headerStoreName">متجر إلكينج</span>
-            <span class="inline-block w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
-            <span id="cloudStatusText" class="text-emerald-600 dark:text-emerald-400 font-medium">سحابي متصل</span>
+    <div class="px-3.5 sm:px-4 py-2 flex flex-col gap-2 w-full">
+      <!-- الصف الأول: الشعار واسم المتجر يميناً، والأزرار الثلاثة يساراً -->
+      <div class="flex items-center justify-between w-full gap-2">
+        <!-- Logo & Store Title (Right in RTL) -->
+        <div class="flex items-center gap-2 shrink-0 min-w-0">
+          <div class="w-9 h-9 rounded-xl bg-gradient-to-tr from-amber-500 to-amber-300 flex items-center justify-center text-slate-950 shadow-md shadow-amber-500/20 shrink-0">
+            <i data-lucide="crown" class="w-5 h-5"></i>
           </div>
+          <div class="min-w-0">
+            <h1 class="text-xs sm:text-sm font-black tracking-wide flex items-center gap-1.5 text-slate-900 dark:text-white shrink-0">
+              <span>ELKing POS</span>
+              <span class="text-[9px] sm:text-[10px] bg-amber-500/10 text-amber-600 dark:text-amber-400 font-semibold px-1.5 py-0.5 rounded border border-amber-500/20 shrink-0">صاحب المحل</span>
+            </h1>
+            <div class="flex items-center gap-1 text-[10px] sm:text-[11px] text-slate-500 dark:text-slate-400 shrink-0">
+              <span id="headerStoreName" class="max-w-[85px] sm:max-w-[130px] truncate">متجر إلكينج</span>
+              <span class="inline-block w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse shrink-0"></span>
+              <span id="cloudStatusText" class="text-emerald-600 dark:text-emerald-400 font-medium shrink-0">سحابي متصل</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- الأزرار الثلاثة (Left in RTL): تحديث البيانات، تبديل المظهر، الملف الشخصي -->
+        <div class="flex items-center gap-1.5 shrink-0">
+          <!-- Refresh Button -->
+          <button id="refreshBtn" title="تحديث البيانات" aria-label="تحديث البيانات" class="header-action-btn w-10 h-10 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 flex items-center justify-center text-slate-700 dark:text-slate-300 transition active:scale-95 shadow-sm">
+            <i data-lucide="rotate-cw" class="w-4 h-4" id="refreshIcon"></i>
+          </button>
+
+          <!-- Dark / Light Mode Toggle -->
+          <button id="themeToggleBtn" type="button" title="تبديل المظهر" aria-label="تبديل المظهر" class="header-action-btn w-10 h-10 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 flex items-center justify-center text-amber-500 dark:text-amber-400 transition active:scale-95 shadow-sm">
+            <i data-lucide="moon" id="themeIconMoon" class="w-4 h-4"></i>
+            <i data-lucide="sun" id="themeIconSun" class="w-4 h-4"></i>
+          </button>
+
+          <!-- User Profile / Logout -->
+          <button id="userProfileBtn" title="الملف الشخصي والخروج" aria-label="الملف الشخصي والخروج" class="header-action-btn w-10 h-10 rounded-xl bg-blue-50 dark:bg-blue-900/40 hover:bg-blue-100 dark:hover:bg-blue-900/60 flex items-center justify-center text-blue-600 dark:text-blue-400 transition active:scale-95 shadow-sm">
+            <i data-lucide="user" class="w-4 h-4"></i>
+          </button>
         </div>
       </div>
 
-      <!-- Branch Selector & Header Controls -->
-      <div class="flex items-center gap-1.5">
-        <!-- Branch Dropdown -->
-        <div class="relative">
-          <select id="branchSelect" class="min-h-[44px] bg-slate-100 dark:bg-slate-800 text-xs font-bold text-slate-800 dark:text-slate-200 rounded-lg px-2.5 py-2 border border-slate-200 dark:border-slate-700 outline-none focus:ring-2 focus:ring-blue-500">
-            <option value="ALL">🌐 جميع الفروع</option>
-          </select>
+      <!-- الصف الثاني: قائمة اختيار الفرع بعرض كامل (#branchFilter) -->
+      <div class="w-full relative">
+        <div class="absolute inset-y-0 right-3 flex items-center pointer-events-none text-slate-400 dark:text-slate-500">
+          <i data-lucide="git-branch" class="w-4 h-4"></i>
         </div>
-
-        <!-- Refresh Button -->
-        <button id="refreshBtn" title="تحديث البيانات" class="min-h-[44px] min-w-[44px] w-11 h-11 rounded-lg bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 flex items-center justify-center text-slate-700 dark:text-slate-300 transition active:scale-95">
-          <i data-lucide="rotate-cw" class="w-4 h-4" id="refreshIcon"></i>
-        </button>
-
-        <!-- Dark / Light Mode Toggle -->
-        <button id="themeToggleBtn" type="button" title="تبديل المظهر" class="min-h-[44px] min-w-[44px] w-11 h-11 rounded-lg bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 flex items-center justify-center text-amber-500 dark:text-amber-400 transition active:scale-95">
-          <i data-lucide="moon" id="themeIconMoon" class="w-4 h-4"></i>
-          <i data-lucide="sun" id="themeIconSun" class="w-4 h-4"></i>
-        </button>
-
-        <!-- User Profile / Logout -->
-        <button id="userProfileBtn" title="الملف الشخصي والخروج" class="min-h-[44px] min-w-[44px] w-11 h-11 rounded-lg bg-blue-50 dark:bg-blue-900/40 hover:bg-blue-100 dark:hover:bg-blue-900/60 flex items-center justify-center text-blue-600 dark:text-blue-400 transition active:scale-95">
-          <i data-lucide="user" class="w-4 h-4"></i>
-        </button>
+        <select id="branchFilter" name="branchFilter" aria-label="اختيار الفرع" class="w-full min-h-[40px] h-10 bg-slate-100/90 dark:bg-slate-800/90 text-xs font-bold text-slate-800 dark:text-slate-200 rounded-xl pr-9 pl-8 py-2 border border-slate-200 dark:border-slate-700/80 outline-none focus:ring-2 focus:ring-blue-500 transition appearance-none shadow-sm cursor-pointer">
+          <option value="ALL">🌐 جميع الفروع</option>
+        </select>
+        <div class="absolute inset-y-0 left-3 flex items-center pointer-events-none text-slate-400 dark:text-slate-500">
+          <i data-lucide="chevron-down" class="w-4 h-4"></i>
+        </div>
       </div>
     </div>
   </header>

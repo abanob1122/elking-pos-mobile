@@ -286,6 +286,7 @@
       document.documentElement.classList.remove('dark');
     }
     updateThemeUI(isDark);
+    triggerIcons();
 
     const themeToggleBtn = el('themeToggleBtn');
     if (themeToggleBtn) {
@@ -520,7 +521,7 @@
   async function loadBranches() {
     try {
       branchesCache = await client.getBranches();
-      const branchSelect = el('branchSelect');
+      const branchSelect = el('branchFilter') || el('branchSelect');
       if (!branchSelect) return;
 
       let activeBranch = client.getActiveBranch();
@@ -687,7 +688,7 @@
       });
     });
 
-    const branchSelect = el('branchSelect');
+    const branchSelect = el('branchFilter') || el('branchSelect');
     if (branchSelect) {
       branchSelect.addEventListener('change', () => {
         if (client) client.setActiveBranch(branchSelect.value);
