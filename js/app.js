@@ -268,19 +268,31 @@
   // =========================================================================
   // Theme Management (Light / Dark)
   // =========================================================================
+  function updateThemeUI(isDark) {
+    const moon = el('themeIconMoon');
+    const sun = el('themeIconSun');
+    if (moon) moon.style.display = isDark ? 'block' : 'none';
+    if (sun) sun.style.display = isDark ? 'none' : 'block';
+    const btn = el('themeToggleBtn');
+    if (btn) btn.setAttribute('title', isDark ? 'التبديل إلى المظهر الفاتح' : 'التبديل إلى المظهر الداكن');
+  }
+
   function initTheme() {
     const saved = localStorage.getItem('elking_pwa_theme');
-    if (saved === 'light') {
-      document.documentElement.classList.remove('dark');
-    } else {
+    const isDark = (saved !== 'light');
+    if (isDark) {
       document.documentElement.classList.add('dark');
+    } else {
+      document.documentElement.classList.remove('dark');
     }
+    updateThemeUI(isDark);
 
     const themeToggleBtn = el('themeToggleBtn');
     if (themeToggleBtn) {
       themeToggleBtn.addEventListener('click', () => {
-        const isDark = document.documentElement.classList.toggle('dark');
-        localStorage.setItem('elking_pwa_theme', isDark ? 'dark' : 'light');
+        const currentlyDark = document.documentElement.classList.toggle('dark');
+        localStorage.setItem('elking_pwa_theme', currentlyDark ? 'dark' : 'light');
+        updateThemeUI(currentlyDark);
         triggerIcons();
       });
     }
@@ -643,7 +655,29 @@
   // =========================================================================
   // Navigation & Tab Switching
   // =========================================================================
+  function updateStaffTabVisibility() {
+    const staffBtn = document.querySelector('.nav-tab-btn[data-tab="staff"]');
+    if (!staffBtn) return;
+    const session = client && client.session;
+    const role = ((session && session.role) || '').toLowerCase();
+    // إتاحة تبويب المستخدمين للأدوار الإدارية: owner, admin, manager ومثيلاتها بالعربية
+    const isAllowed = !role || ['owner', 'admin', 'manager', 'مدير', 'ادمن', 'مسؤول', 'صاحب'].some(r => role.includes(r));
+    if (isAllowed) {
+      staffBtn.classList.remove('hidden');
+      staffBtn.style.display = 'flex';
+      staffBtn.removeAttribute('aria-hidden');
+    } else {
+      staffBtn.classList.add('hidden');
+      staffBtn.style.display = 'none';
+      staffBtn.setAttribute('aria-hidden', 'true');
+      if (currentTab === 'staff') {
+        switchTab('dashboard');
+      }
+    }
+  }
+
   function setupNavigation() {
+    updateStaffTabVisibility();
     const tabButtons = document.querySelectorAll('.nav-tab-btn');
     tabButtons.forEach(btn => {
       btn.addEventListener('click', () => {
@@ -1616,6 +1650,7 @@
   // =========================================================================
   async function loadInitialAppData() {
     try {
+      updateStaffTabVisibility();
       const [, storeRes] = await Promise.allSettled([
         loadBranches(),
         client.getStoreInfo(),

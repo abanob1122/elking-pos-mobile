@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="ar" dir="rtl" class="dark">
+<html lang="ar" dir="rtl" class="dark overflow-x-hidden max-w-[100vw] w-full">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
@@ -49,7 +49,7 @@
   <!-- Custom CSS -->
   <link rel="stylesheet" href="./css/app.css">
 </head>
-<body class="bg-slate-100 dark:bg-slate-950 text-slate-900 dark:text-slate-100 min-h-screen flex flex-col antialiased">
+<body class="bg-slate-100 dark:bg-slate-950 text-slate-900 dark:text-slate-100 min-h-screen flex flex-col antialiased overflow-x-hidden max-w-[100vw] w-full">
 
   <!-- ===================================================================== -->
   <!-- Top Application Header -->
@@ -89,9 +89,9 @@
         </button>
 
         <!-- Dark / Light Mode Toggle -->
-        <button id="themeToggleBtn" title="تبديل المظهر" class="min-h-[44px] min-w-[44px] w-11 h-11 rounded-lg bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 flex items-center justify-center text-amber-500 dark:text-amber-400 transition active:scale-95">
-          <i data-lucide="moon" class="w-4 h-4 hidden dark:block"></i>
-          <i data-lucide="sun" class="w-4 h-4 block dark:hidden"></i>
+        <button id="themeToggleBtn" type="button" title="تبديل المظهر" class="min-h-[44px] min-w-[44px] w-11 h-11 rounded-lg bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 flex items-center justify-center text-amber-500 dark:text-amber-400 transition active:scale-95">
+          <i data-lucide="moon" id="themeIconMoon" class="w-4 h-4"></i>
+          <i data-lucide="sun" id="themeIconSun" class="w-4 h-4"></i>
         </button>
 
         <!-- User Profile / Logout -->
@@ -105,7 +105,7 @@
   <!-- ===================================================================== -->
   <!-- Main Content Scroll Area -->
   <!-- ===================================================================== -->
-  <main class="flex-1 overflow-y-auto px-4 py-4 pb-24 max-w-lg mx-auto w-full">
+  <main class="flex-1 overflow-y-auto px-4 py-4 pb-28 sm:pb-32 max-w-lg mx-auto w-full">
 
     <!-- Connection Error Alert Banner -->
     <div id="connectionErrorBanner" class="hidden mb-4 bg-rose-600/95 text-white rounded-2xl p-3.5 shadow-lg shadow-rose-500/20 border border-rose-400/30 flex items-center justify-between gap-3" role="alert">
@@ -367,36 +367,36 @@
   <!-- ===================================================================== -->
   <!-- Bottom Navigation Bar (5 Main Tabs)                                   -->
   <!-- ===================================================================== -->
-  <nav class="fixed bottom-0 left-0 right-0 z-30 bg-white/95 dark:bg-slate-900/95 backdrop-blur border-t border-slate-200 dark:border-slate-800 shadow-lg pb-safe">
-    <div class="max-w-lg mx-auto flex items-center justify-around py-2 px-1">
+  <nav class="fixed bottom-0 left-0 right-0 z-30 bg-white/95 dark:bg-slate-900/95 backdrop-blur border-t border-slate-200 dark:border-slate-800 shadow-lg pb-safe w-full max-w-[100vw] overflow-hidden">
+    <div class="w-full max-w-lg mx-auto grid grid-cols-5 items-center justify-items-stretch py-2 px-1">
       <!-- 1. Dashboard -->
-      <button class="nav-tab-btn active flex-1 flex flex-col items-center gap-1 text-blue-600 dark:text-blue-400" data-tab="dashboard">
-        <i data-lucide="layout-dashboard" class="w-5 h-5"></i>
-        <span class="text-[10px] font-bold">الرئيسية</span>
+      <button class="nav-tab-btn active min-w-0 w-full flex-1 flex flex-col items-center justify-center gap-1 py-1 px-0.5 text-center text-blue-600 dark:text-blue-400 transition" data-tab="dashboard">
+        <i data-lucide="layout-dashboard" class="w-5 h-5 shrink-0"></i>
+        <span class="text-[10px] font-bold truncate max-w-full block">الرئيسية</span>
       </button>
 
       <!-- 2. Sales -->
-      <button class="nav-tab-btn flex-1 flex flex-col items-center gap-1 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200" data-tab="sales">
-        <i data-lucide="receipt" class="w-5 h-5"></i>
-        <span class="text-[10px] font-bold">المبيعات</span>
+      <button class="nav-tab-btn min-w-0 w-full flex-1 flex flex-col items-center justify-center gap-1 py-1 px-0.5 text-center text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 transition" data-tab="sales">
+        <i data-lucide="receipt" class="w-5 h-5 shrink-0"></i>
+        <span class="text-[10px] font-bold truncate max-w-full block">المبيعات</span>
       </button>
 
       <!-- 3. Inventory -->
-      <button class="nav-tab-btn flex-1 flex flex-col items-center gap-1 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200" data-tab="inventory">
-        <i data-lucide="package" class="w-5 h-5"></i>
-        <span class="text-[10px] font-bold">المخزون</span>
+      <button class="nav-tab-btn min-w-0 w-full flex-1 flex flex-col items-center justify-center gap-1 py-1 px-0.5 text-center text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 transition" data-tab="inventory">
+        <i data-lucide="package" class="w-5 h-5 shrink-0"></i>
+        <span class="text-[10px] font-bold truncate max-w-full block">المخزون</span>
       </button>
 
       <!-- 4. Treasury & Shifts -->
-      <button class="nav-tab-btn flex-1 flex flex-col items-center gap-1 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200" data-tab="treasury">
-        <i data-lucide="coins" class="w-5 h-5"></i>
-        <span class="text-[10px] font-bold">الخزينة</span>
+      <button class="nav-tab-btn min-w-0 w-full flex-1 flex flex-col items-center justify-center gap-1 py-1 px-0.5 text-center text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 transition" data-tab="treasury">
+        <i data-lucide="coins" class="w-5 h-5 shrink-0"></i>
+        <span class="text-[10px] font-bold truncate max-w-full block">الخزينة</span>
       </button>
 
-      <!-- 5. Staff -->
-      <button class="nav-tab-btn flex-1 flex flex-col items-center gap-1 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200" data-tab="staff">
-        <i data-lucide="users" class="w-5 h-5"></i>
-        <span class="text-[10px] font-bold">الموظفون</span>
+      <!-- 5. Staff / Users -->
+      <button class="nav-tab-btn min-w-0 w-full flex-1 flex flex-col items-center justify-center gap-1 py-1 px-0.5 text-center text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 transition" data-tab="staff">
+        <i data-lucide="users" class="w-5 h-5 shrink-0"></i>
+        <span class="text-[10px] font-bold truncate max-w-full block">المستخدمين</span>
       </button>
     </div>
   </nav>
