@@ -685,7 +685,18 @@
   // =========================================================================
   async function renderSales(branchId) {
     const search = el('salesSearchInput')?.value || '';
-    const date = el('salesDateInput')?.value || null;
+    const dateFilterVal = el('salesDateFilter')?.value || 'ALL';
+    let date = null;
+    if (dateFilterVal === 'today') {
+      const now = new Date();
+      date = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+    } else if (dateFilterVal === 'yesterday') {
+      const y = new Date();
+      y.setDate(y.getDate() - 1);
+      date = `${y.getFullYear()}-${String(y.getMonth() + 1).padStart(2, '0')}-${String(y.getDate()).padStart(2, '0')}`;
+    } else if (dateFilterVal && dateFilterVal !== 'ALL') {
+      date = dateFilterVal;
+    }
     const paymentMethod = el('salesPaymentFilter')?.value || 'ALL';
 
     const sales = await client.getSales({
@@ -952,7 +963,11 @@
   }
 
   async function renderShiftsLogs(branchId) {
-    const shifts = await client.getShifts({ branchId, limit: 30 });
+    const [shifts, recentSales, todayExpenses] = await Promise.all([
+      client.getShifts({ branchId, limit: 30 }),
+      client.getSales({ branchId, limit: 100 }).catch(() => []),
+      client.getTreasuryLogs({ branchId, limit: 100 }).catch(() => [])
+    ]);
     const listEl = el('shiftsLogsList');
     if (!listEl) return;
 
@@ -967,10 +982,53 @@
     }
 
     listEl.innerHTML = shifts.map(s => {
-      const isOpen = !s.end_time;
-      const sales = Number(s.total_sales || 0);
+      const isOpen = !s.end_time || String(s.status).toLowerCase() === 'open' || String(s.status).includes('مفتوح');
       const startingCash = Number(s.starting_cash ?? s.opening_cash ?? 0);
-      const actualCash = Number(s.actual_cash ?? s.closing_cash ?? 0);
+      let sales = Number(s.total_sales || 0);
+      let cashSales = Number(s.cash_sales || 0);
+      let expenses = Number(s.expenses || 0);
+
+      // حساب لحظي لمبيعات الوردية ونقدية الدرج إن كانت مفتوحة
+      if (isOpen) {
+        const sStart = s.start_time ? new Date(s.start_time).getTime() : 0;
+        const sUser = String(s.username || s.cashier_name || '').toLowerCase().trim();
+        const sLocalId = Number(s.local_shift_id || 0);
+
+        let realTimeSales = 0;
+        let realTimeCash = 0;
+        for (const sale of (recentSales || [])) {
+          const saleTime = new Date(sale.sale_date || sale.created_at).getTime();
+          const saleUser = String(sale.cashier_username || sale.cashier_name || '').toLowerCase().trim();
+          const saleShiftId = Number(sale.local_shift_id || sale.shift_id || 0);
+
+          const matches = (sLocalId > 0 && saleShiftId === sLocalId) ||
+                          (saleTime >= sStart && (!sUser || !saleUser || sUser === saleUser));
+          if (matches) {
+            const amt = getSaleAmount(sale);
+            realTimeSales += amt;
+            const cat = client.categorizePayment ? client.categorizePayment(sale.payment_method) : 'cash';
+            if (cat === 'cash') realTimeCash += amt;
+          }
+        }
+        sales = Math.max(sales, realTimeSales);
+        cashSales = Math.max(cashSales, realTimeCash);
+
+        // حساب مصروفات الوردية إن لم تكن مسجلة بالسحابة
+        if (expenses <= 0 && todayExpenses && todayExpenses.length > 0) {
+          for (const exp of todayExpenses) {
+            const expTime = new Date(exp.created_at).getTime();
+            const expShift = Number(exp.shift_id || 0);
+            if ((sLocalId > 0 && expShift === sLocalId) || (expTime >= sStart)) {
+              expenses += Math.abs(Number(exp.amount || 0));
+            }
+          }
+        }
+      }
+
+      const drawerCashLabel = isOpen ? 'المتوقع بالدرج:' : 'الفعلي بالدرج:';
+      const drawerCashVal = isOpen
+        ? (startingCash + cashSales - expenses)
+        : Number(s.actual_cash ?? s.closing_cash ?? 0);
       const variance = Number(s.handover_variance ?? 0);
 
       return `
@@ -989,7 +1047,7 @@
             <div>البدء: <strong class="text-slate-700 dark:text-slate-300">${formatDateTime(s.start_time)}</strong></div>
             <div>الإغلاق: <strong class="text-slate-700 dark:text-slate-300">${s.end_time ? formatDateTime(s.end_time) : 'مفتوحة'}</strong></div>
             <div>رصيد الافتتاح: <strong class="text-slate-700 dark:text-slate-300 num-ltr">${formatMoney(startingCash)}</strong></div>
-            <div>الفعلي بالدرج: <strong class="text-slate-700 dark:text-slate-300 num-ltr">${formatMoney(actualCash)}</strong></div>
+            <div>${drawerCashLabel} <strong class="text-slate-700 dark:text-slate-300 num-ltr">${formatMoney(drawerCashVal)}</strong></div>
           </div>
 
           ${!isOpen && variance !== 0 ? `
@@ -1252,6 +1310,7 @@
 
     // Filter listeners for Sales & Inventory
     el('salesSearchInput')?.addEventListener('input', () => renderSales(client.getActiveBranch()));
+    el('salesDateFilter')?.addEventListener('change', () => renderSales(client.getActiveBranch()));
     el('salesDateInput')?.addEventListener('change', () => renderSales(client.getActiveBranch()));
     el('salesPaymentFilter')?.addEventListener('change', () => renderSales(client.getActiveBranch()));
 

@@ -321,9 +321,10 @@
         }
       }
 
-      // 2. مصروفات اليوم من الخزينة
+      // 2. مصروفات اليوم من الخزينة والورديات
       const treasuryQuery = `/treasury_logs?store_id=eq.${this.config.storeId}${branchFilter}&created_at=gte.${startOfDay.toISOString()}&created_at=lte.${endOfDay.toISOString()}`;
       let totalExpenses = 0;
+      const seenExpenseKeys = new Set();
       try {
         let logs = (await this.request(treasuryQuery)) || [];
         if (logs.length === 0) {
@@ -339,31 +340,72 @@
           });
         }
         for (const l of logs) {
-          const type = (l.type || l.trans_type || '').toLowerCase();
-          if (type.includes('exp') || type.includes('صرف') || type.includes('مصروف')) {
-            totalExpenses += Number(l.amount || 0);
+          const type = String(l.type || l.trans_type || '').toLowerCase();
+          const cat = String(l.category || '').toLowerCase();
+          const notes = String(l.notes || l.note || '').toLowerCase();
+          const rawAmt = Number(l.amount || 0);
+          const isExpense = type.includes('exp') || type.includes('صرف') || type.includes('مصروف') ||
+                            type.includes('صادر') || type.includes('سحب') || type.includes('out') ||
+                            cat.includes('مصروف') || cat.includes('صرف') || cat.includes('expense') ||
+                            notes.includes('مصروف') || rawAmt < 0;
+          if (isExpense) {
+            const absAmt = Math.abs(rawAmt);
+            totalExpenses += absAmt;
+            if (l.local_trans_id) seenExpenseKeys.add(String(l.local_trans_id));
+            if (l.shift_id) seenExpenseKeys.add(`shift_${l.shift_id}`);
           }
         }
       } catch (_) {}
 
       // 3. الورديات المفتوحة حالياً (Active Shifts) ونقدية الدرج
-      const shiftsQuery = `/shifts?store_id=eq.${this.config.storeId}${branchFilter}&end_time=is.null&order=start_time.desc`;
+      const shiftsQuery = `/shifts?store_id=eq.${this.config.storeId}${branchFilter}&or=(status.eq.Open,status.eq.مفتوحة,end_time.is.null)&order=start_time.desc`;
       let activeShifts = [];
       let openShiftDrawerCash = 0;
       try {
         activeShifts = (await this.request(shiftsQuery)) || [];
         for (const sh of activeShifts) {
-          const startCash = Number(sh.starting_cash || 0);
-          const shCashSales = Number(sh.cash_sales || 0);
-          const shExpenses = Number(sh.expenses || 0);
-          const currentInShift = startCash + shCashSales - shExpenses;
-          if (currentInShift > 0) {
-            openShiftDrawerCash += currentInShift;
+          const shStart = sh.start_time ? new Date(sh.start_time).getTime() : 0;
+          const shUser = String(sh.username || sh.cashier_name || '').toLowerCase().trim();
+          const shLocalId = Number(sh.local_shift_id || 0);
+
+          // حساب مبيعات الوردية المفتوحة لحظياً من فواتير اليوم الصادرة بعد وقت البدء
+          let realTimeShiftSales = 0;
+          let realTimeShiftCashSales = 0;
+          for (const s of sales) {
+            const sDate = new Date(s.sale_date || s.created_at).getTime();
+            const sUser = String(s.cashier_username || s.cashier_name || '').toLowerCase().trim();
+            const sShiftId = Number(s.local_shift_id || s.shift_id || 0);
+
+            const matchesShift = (shLocalId > 0 && sShiftId === shLocalId) ||
+                                 (sDate >= shStart && (!shUser || !sUser || sUser === shUser));
+            if (matchesShift) {
+              const amt = getSaleAmount(s);
+              realTimeShiftSales += amt;
+              const cat = categorizePayment(s.payment_method);
+              if (cat === 'cash') realTimeShiftCashSales += amt;
+            }
           }
+
+          // استخدام القيمة الأكبر بين المحسوب لحظياً والمسجل في الوردية
+          const totalShiftSales = Math.max(Number(sh.total_sales || 0), realTimeShiftSales);
+          const shiftCashSales = Math.max(Number(sh.cash_sales || 0), realTimeShiftCashSales);
+          sh.total_sales = totalShiftSales;
+          sh.cash_sales = shiftCashSales;
+
+          // دمج مصروفات الوردية إن وُجدت ولم تُحتسب في logs
+          const shExp = Number(sh.expenses || 0);
+          if (shExp > 0 && totalExpenses <= 0) {
+            totalExpenses += shExp;
+          }
+
+          const startCash = Number(sh.starting_cash ?? sh.opening_cash ?? 0);
+          const expToDeduct = shExp > 0 ? shExp : totalExpenses;
+          const currentInShift = startCash + shiftCashSales - expToDeduct;
+          openShiftDrawerCash += currentInShift;
         }
       } catch (_) {}
 
-      // نقدية الدرج: من الوردية المفتوحة أو صافي الكاش ناقص المصروفات
+      // نقدية الدرج (كاش) — بعد خصم المصروفات النقدية
       const netCashInHand = openShiftDrawerCash > 0
         ? openShiftDrawerCash
         : Math.max(0, cashSales - totalExpenses);
