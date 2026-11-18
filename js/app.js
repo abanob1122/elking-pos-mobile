@@ -319,14 +319,18 @@
           }
         }
 
-        // حفظ المعرف واسم المتجر فورياً في الإعدادات
+        // حفظ المعرف واسم المتجر فورياً في الإعدادات والذاكرة
         if (client) {
           client.saveConfig({ storeId: cleanStoreId, storeName: decodedName });
         }
+        localStorage.setItem('elking_pwa_store_id', cleanStoreId);
         localStorage.setItem('elking_pwa_store_name', decodedName);
 
-        // تنظيف الرابط في المتصفح دون إعادة تحميل الصفحة
-        // نستخدم pathname لحفظ المسار الفرعي /elking-pos-mobile/
+        // ملء خانة معرّف المتجر في واجهة تسجيل الدخول إن وجدت
+        const storeInp = el('loginStoreId');
+        if (storeInp) storeInp.value = cleanStoreId;
+
+        // تنظيف الرابط في المتصفح فوراً وحذف معلمات الرابط دون إعادة تحميل الصفحة
         window.history.replaceState({}, document.title, window.location.pathname);
 
         // إشعار فوري
@@ -355,24 +359,20 @@
 
     loginModal.classList.remove('hidden');
 
-    // ملء حقول إعدادات الخادم من القيم المحفوظة
-    const cfgUrl = el('cfgUrl');
-    const cfgKey = el('cfgKey');
-    const cfgStoreId = el('cfgStoreId');
-
-    if (client) {
-      if (cfgUrl) cfgUrl.value = client.config.url || '';
-      if (cfgKey) cfgKey.value = client.config.anonKey || '';
-      if (cfgStoreId) cfgStoreId.value = client.config.storeId || '';
+    const storeId = (client && client.config && client.config.storeId)
+      || localStorage.getItem('elking_pwa_store_id')
+      || '';
+    const storeInp = el('loginStoreId');
+    if (storeInp && storeId) {
+      storeInp.value = storeId;
     }
 
     // تحديث شارة المتجر المتصل
     const badge = el('connectedStoreBadge');
     const nameEl = el('connectedStoreName');
     const savedStoreName = localStorage.getItem('elking_pwa_store_name')
-      || (client && client.config.storeName)
+      || (client && client.config && client.config.storeName)
       || 'متجر إلكينج';
-    const storeId = client && client.config.storeId;
 
     if (badge && nameEl) {
       if (storeId) {
@@ -391,10 +391,14 @@
 
     triggerIcons();
 
-    // تركيز المؤشر مباشرة على خانة اسم المستخدم
+    // تركيز المؤشر مباشرة
     setTimeout(() => {
-      const userInp = el('loginUsername');
-      if (userInp) userInp.focus();
+      if (storeInp && !storeInp.value) {
+        storeInp.focus();
+      } else {
+        const userInp = el('loginUsername');
+        if (userInp) userInp.focus();
+      }
     }, 150);
   }
 
@@ -408,59 +412,19 @@
   function setupAuthEvents() {
     // زر "تغيير المتجر" في شارة المتجر المتصل
     const changeStoreBtn = el('changeStoreBtn');
-    const panel = el('serverSettingsPanel');
-    const chevron = el('chevronSettings');
-
-    if (changeStoreBtn && panel) {
+    if (changeStoreBtn) {
       changeStoreBtn.addEventListener('click', () => {
-        panel.classList.remove('hidden');
-        if (chevron) {
-          chevron.style.transform = 'rotate(180deg)';
+        const storeInp = el('loginStoreId');
+        if (storeInp) {
+          storeInp.value = '';
+          storeInp.focus();
         }
-        const cfgStoreInp = el('cfgStoreId');
-        if (cfgStoreInp) {
-          cfgStoreInp.focus();
-          cfgStoreInp.select();
-        }
+        const badge = el('connectedStoreBadge');
+        if (badge) badge.classList.add('hidden');
       });
     }
 
-    // Accordion for Server Settings in Login
-    const toggleBtn = el('toggleServerSettingsBtn');
-    if (toggleBtn && panel) {
-      toggleBtn.addEventListener('click', () => {
-        const isHidden = panel.classList.toggle('hidden');
-        if (chevron) {
-          chevron.style.transform = isHidden ? 'rotate(0deg)' : 'rotate(180deg)';
-        }
-      });
-    }
-
-    // Save Server Config Button
-    const saveCfgBtn = el('saveConfigBtn');
-    if (saveCfgBtn) {
-      saveCfgBtn.addEventListener('click', () => {
-        const url = (el('cfgUrl')?.value || '').trim();
-        const anonKey = (el('cfgKey')?.value || '').trim();
-        const storeId = (el('cfgStoreId')?.value || '').trim();
-        if (!url || !anonKey || !storeId) {
-          showToast('يرجى ملء كافة حقول الإعدادات', true);
-          return;
-        }
-        if (client) {
-          client.saveConfig({ url, anonKey, storeId });
-        }
-        showToast('تم حفظ إعدادات الخادم بنجاح');
-
-        // تحديث شارة المتجر
-        const nameEl = el('connectedStoreName');
-        if (nameEl) {
-          nameEl.textContent = `معرف: ${storeId.substring(0, 12)}...`;
-        }
-      });
-    }
-
-    // Login Form Submit
+    // Login Form Submit (Store ID, Username, Password)
     const loginForm = el('loginForm');
     if (loginForm) {
       loginForm.addEventListener('submit', async (e) => {
@@ -469,9 +433,26 @@
           showToast('تعذّر الاتصال بالخادم — يرجى تحديث الصفحة', true);
           return;
         }
+        const storeId = (el('loginStoreId')?.value || '').trim();
         const username = (el('loginUsername')?.value || '').trim();
         const password = el('loginPassword')?.value || '';
         const submitBtn = el('loginSubmitBtn');
+
+        if (!storeId) {
+          showToast('يرجى إدخال معرّف المتجر (Store ID)', true);
+          const storeInp = el('loginStoreId');
+          if (storeInp) storeInp.focus();
+          return;
+        }
+
+        if (!username || !password) {
+          showToast('يرجى إدخال اسم المستخدم وكلمة المرور', true);
+          return;
+        }
+
+        // تثبيت معرّف المتجر للعميل السحابي
+        client.saveConfig({ storeId: storeId });
+        localStorage.setItem('elking_pwa_store_id', storeId);
 
         const originalBtnHTML = submitBtn ? submitBtn.innerHTML : '';
         if (submitBtn) {
@@ -508,6 +489,21 @@
         const doLogout = confirm(`المستخدم الحالي: ${s.full_name || s.username} (${s.role})\n\nهل ترغب في تسجيل الخروج؟`);
         if (doLogout) {
           client.clearSession();
+          localStorage.removeItem('elking_pwa_session');
+          localStorage.removeItem('elking_pwa_store_id');
+          localStorage.removeItem('elking_pwa_store_name');
+          sessionStorage.clear();
+
+          // تصفير حقول شاشة الدخول للبدء من جديد
+          const storeInp = el('loginStoreId');
+          if (storeInp) storeInp.value = '';
+          const userInp = el('loginUsername');
+          if (userInp) userInp.value = '';
+          const passInp = el('loginPassword');
+          if (passInp) passInp.value = '';
+          const badge = el('connectedStoreBadge');
+          if (badge) badge.classList.add('hidden');
+
           showToast('تم تسجيل الخروج بنجاح');
           showLoginModal();
         }

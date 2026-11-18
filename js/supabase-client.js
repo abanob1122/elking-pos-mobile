@@ -170,9 +170,12 @@
     },
   };
 
+  const DEFAULT_SUPABASE_URL = 'https://ohhfnbjzwpntzkawgwbk.supabase.co';
+  const DEFAULT_SUPABASE_ANON_KEY = 'sb_publishable_bu8eKSNTAr_OjpxNRNkBoA_s71lo9Xf';
+
   const DEFAULT_CONFIG = {
-    url: 'https://ohhfnbjzwpntzkawgwbk.supabase.co',
-    anonKey: 'sb_publishable_bu8eKSNTAr_OjpxNRNkBoA_s71lo9Xf',
+    url: DEFAULT_SUPABASE_URL,
+    anonKey: DEFAULT_SUPABASE_ANON_KEY,
     storeId: 'bc04f845-d4c8-4786-b655-907adbd2d03e',
     storeName: 'إلكينج POS',
   };
@@ -188,14 +191,25 @@
     _loadConfig() {
       try {
         const saved = storage.getItem(STORAGE_KEYS.CONFIG);
-        return saved ? { ...DEFAULT_CONFIG, ...JSON.parse(saved) } : { ...DEFAULT_CONFIG };
+        const parsed = saved ? JSON.parse(saved) : {};
+        return {
+          ...DEFAULT_CONFIG,
+          ...parsed,
+          url: DEFAULT_SUPABASE_URL,
+          anonKey: DEFAULT_SUPABASE_ANON_KEY,
+        };
       } catch (e) {
         return { ...DEFAULT_CONFIG };
       }
     }
 
     saveConfig(newConfig) {
-      this.config = { ...this.config, ...newConfig };
+      const sanitized = {
+        ...newConfig,
+        url: DEFAULT_SUPABASE_URL,
+        anonKey: DEFAULT_SUPABASE_ANON_KEY,
+      };
+      this.config = { ...this.config, ...sanitized };
       this._branchesCache = null;
       storage.setItem(STORAGE_KEYS.CONFIG, JSON.stringify(this.config));
     }
