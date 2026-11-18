@@ -652,6 +652,122 @@
         headers: { 'Prefer': 'return=representation' },
       });
     }
+
+    // =========================================================================
+    // Supabase Realtime — اشتراك لحظي عبر WebSocket (postgres_changes)
+    // يُحدِّث الواجهة خلال 1-2 ثانية من أي تغيير على الكمبيوتر
+    // =========================================================================
+
+    /**
+     * تفعيل الاشتراك اللحظي Realtime على جداول:
+     *   sales, shifts, treasury_logs, products, staff_users
+     * لـ store_id الحالي، مع إعادة الاتصال التلقائي عند انقطاع الشبكة.
+     * @param {Function} onChangeCallback - يُستدعى عند كل تغيير: fn(table, eventType, newRecord)
+     * @returns {Function} unsubscribe — استدعِها لإلغاء الاشتراك
+     */
+    subscribeRealtime(onChangeCallback) {
+      const storeId = this.config.storeId;
+      if (!storeId || typeof WebSocket === 'undefined') {
+        return () => {};
+      }
+
+      const baseUrl = this.config.url.replace(/\/+$/, '');
+      const wsUrl = baseUrl
+        .replace(/^https:\/\//, 'wss://')
+        .replace(/^http:\/\//, 'ws://');
+
+      const REALTIME_URL = `${wsUrl}/realtime/v1/websocket?apikey=${this.config.anonKey}&vsn=1.0.0`;
+      const TABLES = ['sales', 'shifts', 'treasury_logs', 'products', 'staff_users'];
+
+      let ws = null;
+      let heartbeatTimer = null;
+      let reconnectTimer = null;
+      let _stopped = false;
+      let _ref = 1;
+      const _subs = {}; // topic → ref
+
+      const _send = (obj) => {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify(obj));
+        }
+      };
+
+      const _subscribe = (table) => {
+        const ref = String(_ref++);
+        const topic = `realtime:public:${table}`;
+        _subs[table] = ref;
+        _send({
+          topic,
+          event: 'phx_join',
+          payload: {
+            config: {
+              broadcast: { self: false },
+              postgres_changes: [{
+                event: '*',
+                schema: 'public',
+                table,
+                filter: `store_id=eq.${storeId}`,
+              }],
+            },
+          },
+          ref,
+        });
+      };
+
+      const _connect = () => {
+        if (_stopped) return;
+        try {
+          ws = new WebSocket(REALTIME_URL);
+        } catch (e) {
+          reconnectTimer = setTimeout(_connect, 5000);
+          return;
+        }
+
+        ws.onopen = () => {
+          // بث نبضة القلب كل 30 ثانية
+          heartbeatTimer = setInterval(() => {
+            _send({ topic: 'phoenix', event: 'heartbeat', payload: {}, ref: String(_ref++) });
+          }, 30000);
+          // الاشتراك على جميع الجداول
+          TABLES.forEach(_subscribe);
+        };
+
+        ws.onmessage = (evt) => {
+          try {
+            const msg = JSON.parse(evt.data);
+            if (msg.event === 'postgres_changes' && msg.payload && msg.payload.data) {
+              const { table, type, record, old_record } = msg.payload.data;
+              if (table && onChangeCallback) {
+                onChangeCallback(table, type, record || old_record, old_record);
+              }
+            }
+          } catch (_) {}
+        };
+
+        ws.onerror = () => {};
+
+        ws.onclose = () => {
+          clearInterval(heartbeatTimer);
+          heartbeatTimer = null;
+          if (!_stopped) {
+            // إعادة الاتصال التلقائي بعد 5 ثوانٍ
+            reconnectTimer = setTimeout(_connect, 5000);
+          }
+        };
+      };
+
+      _connect();
+
+      // دالة إلغاء الاشتراك
+      return () => {
+        _stopped = true;
+        clearInterval(heartbeatTimer);
+        clearTimeout(reconnectTimer);
+        if (ws) {
+          try { ws.close(); } catch (_) {}
+        }
+      };
+    }
   }
 
   // تصدير الكائن العام للـ Browser و Node.js

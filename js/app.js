@@ -1326,6 +1326,74 @@
   }
 
   // =========================================================================
+  // Supabase Realtime — تحديث فوري للواجهة عند أي تغيير على الكمبيوتر
+  // =========================================================================
+  let _realtimeUnsubscribe = null;
+  let _realtimeDebounceTimer = null;
+  const _realtimePendingTables = new Set();
+
+  function startRealtimeSync() {
+    if (!client || !client.isLoggedIn()) return;
+    if (_realtimeUnsubscribe) {
+      try { _realtimeUnsubscribe(); } catch (_) {}
+      _realtimeUnsubscribe = null;
+    }
+
+    _realtimeUnsubscribe = client.subscribeRealtime((table, eventType, record) => {
+      // جمع الجداول المتغيرة وانتظار 800ms قبل إعادة التحميل (Debounce)
+      _realtimePendingTables.add(table);
+      clearTimeout(_realtimeDebounceTimer);
+      _realtimeDebounceTimer = setTimeout(() => {
+        const tables = new Set(_realtimePendingTables);
+        _realtimePendingTables.clear();
+
+        const tab = currentTab;
+        if (tables.has('sales') && (tab === 'dashboard' || tab === 'sales')) {
+          refreshCurrentTab();
+        } else if ((tables.has('shifts') || tables.has('treasury_logs')) && (tab === 'dashboard' || tab === 'treasury')) {
+          refreshCurrentTab();
+        } else if (tables.has('products') && (tab === 'dashboard' || tab === 'inventory')) {
+          refreshCurrentTab();
+        } else if (tables.has('staff_users')) {
+          // تحقق من حالة المستخدم المسجّل — طرد فوري إذا عُطِّل من الموبايل
+          _checkCurrentUserStatus();
+        } else {
+          refreshCurrentTab();
+        }
+      }, 800);
+    });
+  }
+
+  function stopRealtimeSync() {
+    if (_realtimeUnsubscribe) {
+      try { _realtimeUnsubscribe(); } catch (_) {}
+      _realtimeUnsubscribe = null;
+    }
+    clearTimeout(_realtimeDebounceTimer);
+    _realtimePendingTables.clear();
+  }
+
+  async function _checkCurrentUserStatus() {
+    if (!client || !client.isLoggedIn()) return;
+    try {
+      const session = client.session;
+      if (!session || !session.username) return;
+      const rows = await client.request(
+        `/staff_users?store_id=eq.${client.config.storeId}&username=eq.${session.username}&select=is_active,is_deleted`
+      );
+      if (!rows || rows.length === 0) return;
+      const u = rows[0];
+      if (!u.is_active || u.is_deleted) {
+        // طرد فوري: مسح الجلسة وإظهار رسالة وإعادة شاشة تسجيل الدخول
+        client.clearSession();
+        stopRealtimeSync();
+        showToast('تم إيقاف صلاحية حسابك من قِبل الإدارة', true);
+        setTimeout(() => { showLoginModal(); }, 1500);
+      }
+    } catch (_) {}
+  }
+
+  // =========================================================================
   // Initial App Load
   // =========================================================================
   async function loadInitialAppData() {
@@ -1337,6 +1405,8 @@
         headerStoreName.textContent = store.store_name || 'متجر إلكينج';
       }
       await refreshCurrentTab();
+      // تفعيل الاشتراك اللحظي Realtime بعد تحميل البيانات الأولية
+      startRealtimeSync();
     } catch (err) {
       console.debug('Error on initial load:', err);
     }
