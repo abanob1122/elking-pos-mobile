@@ -14,6 +14,15 @@
   // =========================================================================
   let currentTab = 'dashboard';
   let branchesCache = [];
+  const state = {
+    branches: [],
+    staff: [],
+    products: [],
+    sales: [],
+    shifts: [],
+    treasury: [],
+    selectedBranchId: 'ALL',
+  };
   let isRefreshing = false;
   let deferredPrompt = null;
   let lastSuccessfulSyncTime = null;
@@ -305,14 +314,41 @@
   // =========================================================================
   // Smart QR Onboarding & URL Parameters
   // =========================================================================
+  function resetAllTenantState() {
+    state.branches = [];
+    state.staff = [];
+    state.products = [];
+    state.sales = [];
+    state.shifts = [];
+    state.treasury = [];
+    state.selectedBranchId = 'ALL';
+    branchesCache = [];
+    salesCurrentPage = 0;
+    lastSuccessfulSyncTime = null;
+
+    ['activeShiftsList', 'lowStockList', 'invoicesList', 'productsList', 'treasuryLogsList', 'shiftsLogsList', 'staffList'].forEach((id) => {
+      const node = el(id);
+      if (node) node.innerHTML = '';
+    });
+    const branchSelect = el('branchFilter') || el('branchSelect');
+    if (branchSelect) {
+      branchSelect.innerHTML = '<option value="ALL">🌐 جميع الفروع</option>';
+      branchSelect.value = 'ALL';
+    }
+    const headerStoreName = el('headerStoreName');
+    if (headerStoreName) headerStoreName.textContent = 'متجر إلكينج';
+  }
+
   function handleUrlOnboarding() {
     try {
       const params = new URLSearchParams(window.location.search);
       const storeId = params.get('store_id');
+      const storeCode = params.get('store_code');
       const storeName = params.get('store_name');
 
-      if (storeId) {
-        const cleanStoreId = storeId.trim();
+      if (storeId || storeCode) {
+        const cleanStoreId = (storeId || '').trim();
+        const cleanStoreCode = (storeCode || '').trim().toUpperCase();
         let decodedName = 'متجر إلكينج';
         if (storeName) {
           try {
@@ -324,36 +360,47 @@
 
         // عزل الجلسات: مقارنة الـ store_id الجديد بالمخزن مسبقاً، ومسح الجلسة والكاش فوراً عند الاختلاف
         const prevStoreId = (localStorage.getItem('elking_pwa_store_id') || (client && client.config && client.config.storeId) || '').trim();
-        if (prevStoreId && prevStoreId !== cleanStoreId) {
+        if (prevStoreId && prevStoreId !== cleanStoreId && cleanStoreId) {
+          stopRealtimeSync();
           if (client) {
             client.clearSession();
-            client.setActiveBranch('ALL');
+            client.logout();
           }
+          resetAllTenantState();
           localStorage.removeItem('elking_pwa_session');
           localStorage.removeItem('elking_pwa_active_branch');
           localStorage.removeItem('elking_pwa_last_sync');
           try { sessionStorage.clear(); } catch (_) {}
-          branchesCache = [];
           if (typeof caches !== 'undefined' && caches.keys) {
             caches.keys().then(keys => Promise.all(keys.map(k => caches.delete(k)))).catch(() => {});
           }
         }
 
-        // حفظ المعرف واسم المتجر فورياً في الإعدادات والذاكرة
+        // حفظ المعرف والكود واسم المتجر فورياً في الإعدادات والذاكرة
         if (client) {
-          client.saveConfig({ storeId: cleanStoreId, storeName: decodedName });
+          client.saveConfig({ storeId: cleanStoreId, storeCode: cleanStoreCode, storeName: decodedName });
         }
-        localStorage.setItem('elking_pwa_store_id', cleanStoreId);
+        if (cleanStoreId) localStorage.setItem('elking_pwa_store_id', cleanStoreId);
+        if (cleanStoreCode) localStorage.setItem('elking_pwa_last_store_code', cleanStoreCode);
         localStorage.setItem('elking_pwa_store_name', decodedName);
 
-        // ملء خانة معرّف المتجر في واجهة تسجيل الدخول إن وجدت
         const storeInp = el('loginStoreId');
         if (storeInp) storeInp.value = cleanStoreId;
+        const codeInp = el('loginStoreCode');
+        if (codeInp && cleanStoreCode) codeInp.value = cleanStoreCode;
 
-        // تنظيف الرابط في المتصفح فوراً وحذف معلمات الرابط دون إعادة تحميل الصفحة
+        if (!cleanStoreCode && cleanStoreId && client && typeof client.resolveStoreCodeById === 'function') {
+          client.resolveStoreCodeById(cleanStoreId).then((st) => {
+            if (st && st.store_code) {
+              const norm = String(st.store_code).trim().toUpperCase();
+              localStorage.setItem('elking_pwa_last_store_code', norm);
+              if (codeInp && !codeInp.value) codeInp.value = norm;
+              if (client) client.saveConfig({ storeCode: norm, storeName: st.name || decodedName });
+            }
+          }).catch(() => {});
+        }
+
         window.history.replaceState({}, document.title, window.location.pathname);
-
-        // إشعار فوري
         showToast(`تم ربط المتجر بنجاح: ${decodedName}`);
       }
     } catch (e) {
@@ -382,9 +429,16 @@
     const storeId = (client && client.config && client.config.storeId)
       || localStorage.getItem('elking_pwa_store_id')
       || '';
+    const storeCode = (client && client.config && client.config.storeCode)
+      || localStorage.getItem('elking_pwa_last_store_code')
+      || '';
     const storeInp = el('loginStoreId');
     if (storeInp && storeId) {
       storeInp.value = storeId;
+    }
+    const codeInp = el('loginStoreCode');
+    if (codeInp && storeCode) {
+      codeInp.value = storeCode;
     }
 
     // تحديث شارة المتجر المتصل
@@ -395,10 +449,10 @@
       || 'متجر إلكينج';
 
     if (badge && nameEl) {
-      if (storeId) {
+      if (storeCode || storeId) {
         badge.classList.remove('hidden');
-        nameEl.textContent = savedStoreName;
-        nameEl.title = `معرّف المتجر: ${storeId}`;
+        nameEl.textContent = storeCode ? `${savedStoreName} (${storeCode})` : savedStoreName;
+        nameEl.title = `كود المتجر: ${storeCode || storeId}`;
       } else {
         badge.classList.add('hidden');
       }
@@ -411,10 +465,9 @@
 
     triggerIcons();
 
-    // تركيز المؤشر مباشرة
     setTimeout(() => {
-      if (storeInp && !storeInp.value) {
-        storeInp.focus();
+      if (codeInp && !codeInp.value) {
+        codeInp.focus();
       } else {
         const userInp = el('loginUsername');
         if (userInp) userInp.focus();
@@ -435,16 +488,21 @@
     if (changeStoreBtn) {
       changeStoreBtn.addEventListener('click', () => {
         const storeInp = el('loginStoreId');
-        if (storeInp) {
-          storeInp.value = '';
-          storeInp.focus();
+        if (storeInp) storeInp.value = '';
+        const codeInp = el('loginStoreCode');
+        if (codeInp) {
+          codeInp.value = '';
+          codeInp.focus();
         }
+        localStorage.removeItem('elking_pwa_last_store_code');
+        localStorage.removeItem('elking_pwa_store_id');
+        localStorage.removeItem('elking_pwa_store_name');
         const badge = el('connectedStoreBadge');
         if (badge) badge.classList.add('hidden');
       });
     }
 
-    // Login Form Submit (Store ID, Username, Password)
+    // Login Form Submit (Store Code / Store ID, Username, Password)
     const loginForm = el('loginForm');
     if (loginForm) {
       loginForm.addEventListener('submit', async (e) => {
@@ -453,15 +511,16 @@
           showToast('تعذّر الاتصال بالخادم — يرجى تحديث الصفحة', true);
           return;
         }
+        const storeCode = (el('loginStoreCode')?.value || '').trim().toUpperCase();
         const storeId = (el('loginStoreId')?.value || '').trim();
         const username = (el('loginUsername')?.value || '').trim();
         const password = el('loginPassword')?.value || '';
         const submitBtn = el('loginSubmitBtn');
 
-        if (!storeId) {
-          showToast('يرجى إدخال معرّف المتجر (Store ID)', true);
-          const storeInp = el('loginStoreId');
-          if (storeInp) storeInp.focus();
+        if (!storeCode && !storeId) {
+          showToast('يرجى إدخال كود المتجر (Store Code)', true);
+          const codeInp = el('loginStoreCode');
+          if (codeInp) codeInp.focus();
           return;
         }
 
@@ -470,10 +529,6 @@
           return;
         }
 
-        // تثبيت معرّف المتجر للعميل السحابي
-        client.saveConfig({ storeId: storeId });
-        localStorage.setItem('elking_pwa_store_id', storeId);
-
         const originalBtnHTML = submitBtn ? submitBtn.innerHTML : '';
         if (submitBtn) {
           submitBtn.disabled = true;
@@ -481,7 +536,15 @@
         }
 
         try {
-          const session = await client.login(username, password);
+          const session = await client.login(username, password, { storeCode, storeId });
+          if (session.store_id) localStorage.setItem('elking_pwa_store_id', session.store_id);
+          if (session.store_name) localStorage.setItem('elking_pwa_store_name', session.store_name);
+          if (session.store_code) localStorage.setItem('elking_pwa_last_store_code', session.store_code);
+          const codeInp = el('loginStoreCode');
+          if (codeInp && session.store_code) codeInp.value = session.store_code;
+          const storeInp = el('loginStoreId');
+          if (storeInp && session.store_id) storeInp.value = session.store_id;
+
           showToast(`مرحباً بك، ${session.full_name || session.username}`);
           hideLoginModal();
           await loadInitialAppData();
@@ -508,13 +571,17 @@
         const s = client.session;
         const doLogout = confirm(`المستخدم الحالي: ${s.full_name || s.username} (${s.role})\n\nهل ترغب في تسجيل الخروج؟`);
         if (doLogout) {
-          client.clearSession();
+          stopRealtimeSync();
+          client.logout();
+          resetAllTenantState();
           localStorage.removeItem('elking_pwa_session');
+          localStorage.removeItem('elking_pwa_active_branch');
           localStorage.removeItem('elking_pwa_store_id');
           localStorage.removeItem('elking_pwa_store_name');
-          sessionStorage.clear();
+          localStorage.removeItem('elking_pwa_last_sync');
+          try { sessionStorage.clear(); } catch (_) {}
 
-          // تصفير حقول شاشة الدخول للبدء من جديد
+          // تصفير حقول المستخدم وكلمة المرور مع الإبقاء على آخر كود متجر فقط لسهولة الدخول
           const storeInp = el('loginStoreId');
           if (storeInp) storeInp.value = '';
           const userInp = el('loginUsername');
@@ -537,6 +604,7 @@
   async function loadBranches() {
     try {
       branchesCache = await client.getBranches();
+      state.branches = branchesCache;
       const branchSelect = el('branchFilter') || el('branchSelect');
       if (!branchSelect) return;
 
@@ -546,6 +614,7 @@
         activeBranch = 'ALL';
         client.setActiveBranch('ALL');
       }
+      state.selectedBranchId = activeBranch;
       let optionsHtml = `<option value="ALL" ${activeBranch === 'ALL' ? 'selected' : ''}>🌐 جميع الفروع</option>`;
 
       for (const b of branchesCache) {
@@ -931,6 +1000,7 @@
 
     const hasNext = rawSales.length > SALES_PAGE_SIZE;
     const sales = hasNext ? rawSales.slice(0, SALES_PAGE_SIZE) : rawSales;
+    state.sales = sales;
 
     const listEl = el('invoicesList');
     const pagBar = el('salesPaginationBar');
@@ -1074,6 +1144,7 @@
       lowStockOnly,
       limit: lowStockOnly ? 5000 : 100,
     });
+    state.products = products;
 
     const badgeEl = el('inventoryCountBadge');
     if (badgeEl) {
@@ -1173,6 +1244,7 @@
 
   async function renderTreasuryLogs(branchId) {
     const logs = await client.getTreasuryLogs({ branchId, limit: 50 });
+    state.treasury = logs;
     const listEl = el('treasuryLogsList');
     if (!listEl) return;
 
@@ -1244,6 +1316,7 @@
       client.getSales({ branchId, limit: 100 }),
       client.getTreasuryLogs({ branchId, limit: 100 }),
     ]);
+    state.shifts = shiftsRes.status === 'fulfilled' && Array.isArray(shiftsRes.value) ? shiftsRes.value : [];
 
     if (shiftsRes.status === 'rejected') {
       throw shiftsRes.reason;
@@ -1354,6 +1427,7 @@
   // =========================================================================
   async function renderStaff() {
     const staff = await client.getStaffUsers();
+    state.staff = staff;
     const listEl = el('staffList');
     if (!listEl) return;
 
@@ -1827,9 +1901,10 @@
       if (!rows || rows.length === 0) return;
       const u = rows[0];
       if (!u.is_active || u.is_deleted) {
-        // طرد فوري: مسح الجلسة وإظهار رسالة وإعادة شاشة تسجيل الدخول
-        client.clearSession();
+        // طرد فوري: مسح الجلسة وإغلاق اشتراكات Realtime وتصفير الذاكرة
         stopRealtimeSync();
+        client.logout();
+        resetAllTenantState();
         showToast('تم إيقاف صلاحية حسابك من قِبل الإدارة', true);
         setTimeout(() => { showLoginModal(); }, 1500);
       }

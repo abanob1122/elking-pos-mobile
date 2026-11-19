@@ -4,7 +4,7 @@
  * متوافق 100% مع مسارات GitHub Pages والمجلدات الفرعية
  */
 
-const CACHE_NAME = 'elking-pos-v13-2-0';
+const CACHE_NAME = 'elking-pos-v13-3-0';
 const APP_SHELL_ASSETS = [
   './',
   './index.html',

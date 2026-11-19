@@ -11,6 +11,7 @@
     SESSION: 'elking_pwa_session',
     ACTIVE_BRANCH: 'elking_pwa_active_branch',
     THEME: 'elking_pwa_theme',
+    LAST_STORE_CODE: 'elking_pwa_last_store_code',
   };
 
   /**
@@ -283,6 +284,7 @@
     url: DEFAULT_SUPABASE_URL,
     anonKey: DEFAULT_SUPABASE_ANON_KEY,
     storeId: '',
+    storeCode: '',
     storeName: 'إلكينج POS',
   };
 
@@ -292,6 +294,7 @@
       this.session = this._loadSession();
       this.activeBranchId = storage.getItem(STORAGE_KEYS.ACTIVE_BRANCH) || 'ALL';
       this._branchesCache = null;
+      this._activeRealtimeUnsubs = new Set();
     }
 
     _loadConfig() {
@@ -329,6 +332,10 @@
       }
     }
 
+    getSession() {
+      return this.session;
+    }
+
     saveSession(userData) {
       this.session = userData;
       storage.setItem(STORAGE_KEYS.SESSION, JSON.stringify(userData));
@@ -336,11 +343,36 @@
 
     clearSession() {
       this.session = null;
+      this._branchesCache = null;
       storage.removeItem(STORAGE_KEYS.SESSION);
     }
 
+    removeAllChannels() {
+      if (this._activeRealtimeUnsubs && this._activeRealtimeUnsubs.size > 0) {
+        for (const unsub of Array.from(this._activeRealtimeUnsubs)) {
+          try { unsub(); } catch (_) {}
+        }
+        this._activeRealtimeUnsubs.clear();
+      }
+    }
+
+    logout() {
+      this.removeAllChannels();
+      this.clearSession();
+      this.setActiveBranch('ALL');
+      this.config = { ...DEFAULT_CONFIG };
+      storage.removeItem(STORAGE_KEYS.CONFIG);
+      storage.removeItem(STORAGE_KEYS.ACTIVE_BRANCH);
+      storage.removeItem('elking_pwa_store_id');
+      storage.removeItem('elking_pwa_store_name');
+      storage.removeItem('elking_pwa_last_sync');
+      try {
+        if (typeof sessionStorage !== 'undefined') sessionStorage.clear();
+      } catch (_) {}
+    }
+
     isLoggedIn() {
-      return Boolean(this.session && this.session.username);
+      return Boolean(this.session && this.session.username && this.session.store_id);
     }
 
     setActiveBranch(branchId) {
@@ -353,22 +385,32 @@
     }
 
     /**
-     * التحقق الإلزامي من وجود store_id صالح قبل إرسال أي طلب إلى Supabase
+     * التحقق الإلزامي من وجود store_id صالح في الجلسة النشطة قبل أي استعلام أو تعديل
      */
-    _requireStoreId() {
-      const sid = (this.config && this.config.storeId ? String(this.config.storeId).trim() : '');
-      if (!sid) {
-        throw new Error('معرّف المتجر (Store ID) غير محدد — امسح الـ QR Code أو أدخل معرّف المتجر أولاً');
+    _requireSessionStoreId() {
+      const sessionSid = (this.session && this.session.store_id)
+        ? String(this.session.store_id).trim()
+        : '';
+      if (!sessionSid) {
+        throw new Error('غير مصرح: معرّف المتجر (store_id) مفقود من الجلسة النشطة — يرجى تسجيل الدخول');
       }
-      return encodeURIComponent(sid);
+      const cfgSid = (this.config && this.config.storeId)
+        ? String(this.config.storeId).trim()
+        : '';
+      if (cfgSid && cfgSid !== sessionSid) {
+        throw new Error('تعارض عزل المتاجر: الجلسة لا تخص المتجر الحالي');
+      }
+      return encodeURIComponent(sessionSid);
     }
 
     /**
-     * تنفيذ طلب HTTP موحد ضد Supabase PostgREST
+     * واجهة الحراسة الموحّدة — تفوّض دائماً إلى _requireSessionStoreId()
      */
-    async request(endpoint, options = {}) {
-      // منع تماماً إرسال أي طلب جلب أو تعديل بيانات إذا كان storeId فارغاً
-      this._requireStoreId();
+    _requireStoreId() {
+      return this._requireSessionStoreId();
+    }
+
+    async _publicAuthRequest(endpoint, options = {}) {
       const url = `${this.config.url.replace(/\/+$/, '')}/rest/v1${endpoint.startsWith('/') ? '' : '/'}${endpoint}`;
       const headers = {
         'apikey': this.config.anonKey,
@@ -377,18 +419,14 @@
         'Content-Type': 'application/json',
         ...(options.headers || {}),
       };
-
       const fetchOptions = {
         method: options.method || 'GET',
         headers,
       };
-
       if (options.body) {
         fetchOptions.body = typeof options.body === 'string' ? options.body : JSON.stringify(options.body);
       }
-
       const response = await fetch(url, fetchOptions);
-
       if (!response.ok) {
         let errBody;
         try {
@@ -401,59 +439,129 @@
         err.details = errBody;
         throw err;
       }
-
       if (response.status === 204) return null;
       const text = await response.text();
       return text ? JSON.parse(text) : null;
     }
 
+    /**
+     * تنفيذ طلب HTTP موحد ضد Supabase PostgREST — محروس إجبارياً بـ store_id الجلسة
+     */
+    async request(endpoint, options = {}) {
+      // منع تماماً إرسال أي طلب جلب أو تعديل بيانات إذا غاب store_id عن الجلسة
+      this._requireStoreId();
+      return await this._publicAuthRequest(endpoint, options);
+    }
+
     // =========================================================================
-    // تسجيل الدخول والتحقق من كلمة المرور (مع دعم RPC الآمن والتراجع التلقائي)
+    // تسجيل الدخول المعزول بكود المتجر (Store Code) والتحقق من كلمة المرور
     // =========================================================================
-    async login(username, password) {
+    async resolveStoreCodeById(storeId) {
+      const cleanId = String(storeId || '').trim();
+      if (!cleanId) return null;
+      const rows = await this._publicAuthRequest(
+        `/stores?id=eq.${encodeURIComponent(cleanId)}&select=id,name,store_code&limit=1`
+      );
+      return rows && rows.length > 0 ? rows[0] : null;
+    }
+
+    async login(username, password, { storeCode = '', storeId = '' } = {}) {
       const cleanUser = (username || '').trim();
+      const cleanCode = String(storeCode || '').trim().toUpperCase();
+      const cleanStoreId = String(storeId || (this.config && this.config.storeId) || '').trim();
+
+      if (!cleanCode && !cleanStoreId) {
+        throw new Error('يرجى إدخال كود المتجر (Store Code) أولاً');
+      }
       if (!cleanUser || !password) {
         throw new Error('يرجى إدخال اسم المستخدم وكلمة المرور');
       }
 
       let users = null;
+      let resolvedStoreId = cleanStoreId;
+      let resolvedStoreName = (this.config && this.config.storeName) || 'متجر إلكينج';
+      let resolvedStoreCode = cleanCode;
 
-      // 1. محاولة استدعاء RPC الآمن أولاً (/rpc/verify_staff_login)
-      try {
-        const rpcRes = await this.request('/rpc/verify_staff_login', {
-          method: 'POST',
-          body: {
-            p_store_id: this.config.storeId,
-            p_username: cleanUser,
-            p_password_hash: '',
-          },
-        });
-        if (Array.isArray(rpcRes) && rpcRes.length > 0) {
-          users = rpcRes;
-        } else if (rpcRes && typeof rpcRes === 'object' && rpcRes.username) {
-          users = [rpcRes];
+      if (cleanCode) {
+        // 1. الدخول المعزول عبر RPC verify_staff_login_by_code(p_store_code, p_username, p_password)
+        try {
+          const rpcRes = await this._publicAuthRequest('/rpc/verify_staff_login_by_code', {
+            method: 'POST',
+            body: {
+              p_store_code: cleanCode,
+              p_username: cleanUser,
+              p_password: '',
+            },
+          });
+          if (Array.isArray(rpcRes) && rpcRes.length > 0) {
+            users = rpcRes;
+          } else if (rpcRes && typeof rpcRes === 'object' && rpcRes.username) {
+            users = [rpcRes];
+          }
+        } catch (rpcErr) {
+          // التراجع فقط عند 404 (RPC غير منشورة بعد)، مع العزل الصارم بـ store_code -> store_id
+          if (rpcErr && rpcErr.status !== 404 && !String(rpcErr.message || '').includes('PGRST202')) {
+            throw rpcErr;
+          }
         }
-      } catch (_) {
-        // التراجع التلقائي للاستعلام المباشر إذا لم تكن دالة الـ RPC مفعلة
+
+        if (!users || users.length === 0) {
+          const stores = await this._publicAuthRequest(
+            `/stores?store_code=eq.${encodeURIComponent(cleanCode)}&select=id,name,store_code&limit=1`
+          );
+          if (!stores || stores.length === 0 || !stores[0].id) {
+            throw new Error('كود المتجر غير صحيح أو غير مسجل');
+          }
+          resolvedStoreId = String(stores[0].id).trim();
+          resolvedStoreName = stores[0].name || resolvedStoreName;
+          resolvedStoreCode = String(stores[0].store_code || cleanCode).trim().toUpperCase();
+
+          const query = `/staff_users?store_id=eq.${encodeURIComponent(resolvedStoreId)}&username=eq.${encodeURIComponent(cleanUser)}&is_deleted=eq.false&limit=1`;
+          users = await this._publicAuthRequest(query);
+        }
+      } else {
+        // دخول من رابط QR يحتوي store_id صريح
+        try {
+          const rpcRes = await this._publicAuthRequest('/rpc/verify_staff_login', {
+            method: 'POST',
+            body: {
+              p_store_id: cleanStoreId,
+              p_username: cleanUser,
+              p_password_hash: '',
+            },
+          });
+          if (Array.isArray(rpcRes) && rpcRes.length > 0) {
+            users = rpcRes;
+          } else if (rpcRes && typeof rpcRes === 'object' && rpcRes.username) {
+            users = [rpcRes];
+          }
+        } catch (_) {}
+
+        if (!users || users.length === 0) {
+          const query = `/staff_users?store_id=eq.${encodeURIComponent(cleanStoreId)}&username=eq.${encodeURIComponent(cleanUser)}&is_deleted=eq.false&limit=1`;
+          users = await this._publicAuthRequest(query);
+        }
       }
 
-      // 2. التراجع التلقائي (Fallback) إلى جدول staff_users
       if (!users || users.length === 0) {
-        const query = `/staff_users?store_id=eq.${this.config.storeId}&username=eq.${encodeURIComponent(cleanUser)}&is_deleted=eq.false&limit=1`;
-        users = await this.request(query);
-      }
-
-      if (!users || users.length === 0) {
-        throw new Error('اسم المستخدم غير مسجل أو غير موجود');
+        throw new Error('اسم المستخدم غير مسجل في هذا المتجر أو كود المتجر غير صحيح');
       }
 
       const user = users[0];
+      const finalStoreId = String(user.store_id || resolvedStoreId || '').trim();
+      if (!finalStoreId) {
+        throw new Error('فشل التحقق من هوية المتجر للجلسة');
+      }
+      if (resolvedStoreId && finalStoreId !== resolvedStoreId) {
+        throw new Error('خطأ عزل المستأجرين: بيانات المستخدم لا تطابق المتجر المحدد');
+      }
+      resolvedStoreName = user.store_name || resolvedStoreName;
+      resolvedStoreCode = String(user.store_code || resolvedStoreCode || '').trim().toUpperCase();
 
       if (!user.is_active) {
         throw new Error('هذا الحساب معطّل من قِبل إدارة النظام');
       }
 
-      // التحقق من الدور (صاحب المحل / مدير / مسؤول - Admin / Manager)
       const roleNormalized = (user.role || '').trim().toLowerCase();
       const allowedRoles = ['admin', 'manager', 'owner', 'مدير', 'ادمن', 'مسؤول', 'صاحب المحل', 'صاحب العمل', 'المدير'];
       const hasPrivilegedRole = allowedRoles.includes(roleNormalized)
@@ -467,11 +575,22 @@
         throw new Error('تطبيق صاحب المحل مخصص للمديرين والمسؤولين فقط (دورك الحالي: ' + (user.role || 'غير محدد') + ')');
       }
 
-      // التحقق من كلمة المرور عبر CryptoUtils المشتركة
       const cryptoLib = (typeof window !== 'undefined' && window.CryptoUtils) || (typeof globalThis !== 'undefined' && globalThis.CryptoUtils) || (typeof CryptoUtils !== 'undefined' && CryptoUtils);
       const isMatch = await cryptoLib.verifyPassword(password, user.password_hash);
       if (!isMatch) {
         throw new Error('كلمة المرور غير صحيحة');
+      }
+
+      // تصفير أي بقايا جلسة سابقة وتثبيت إعدادات المتجر الجديد حصراً
+      this.removeAllChannels();
+      this.setActiveBranch('ALL');
+      this.saveConfig({
+        storeId: finalStoreId,
+        storeName: resolvedStoreName,
+        storeCode: resolvedStoreCode,
+      });
+      if (resolvedStoreCode) {
+        storage.setItem(STORAGE_KEYS.LAST_STORE_CODE, resolvedStoreCode);
       }
 
       const session = {
@@ -480,7 +599,10 @@
         full_name: user.full_name || user.username,
         role: user.role,
         branch_id: user.branch_id,
-        store_id: user.store_id || this.config.storeId,
+        store_id: finalStoreId,
+        store_code: resolvedStoreCode,
+        store_name: resolvedStoreName,
+        session_token: user.session_token || '',
         loggedInAt: new Date().toISOString(),
       };
 
@@ -763,6 +885,10 @@
       return (await this.request(query)) || [];
     }
 
+    async getSaleItems(saleId) {
+      return await this.getSaleDetails(saleId);
+    }
+
     // =========================================================================
     // المخزون والأصناف (Inventory & Products)
     // =========================================================================
@@ -811,16 +937,22 @@
     // الخزينة والورديات (Treasury & Shifts)
     // =========================================================================
     async getTreasuryLogs({ branchId = 'ALL', limit = 50, offset = 0 } = {}) {
+      const sid = this._requireStoreId();
       const branchClause = await this._resolveBranchFilter(branchId);
-      const filterPrefix = branchClause ? `${branchClause}&` : '';
-      const query = `/treasury_logs?${filterPrefix}order=created_at.desc&limit=${limit}&offset=${offset}`;
+      const scopedClause = branchClause && branchClause.includes('store_id=eq.')
+        ? branchClause
+        : `store_id=eq.${sid}`;
+      const query = `/treasury_logs?${scopedClause}&order=created_at.desc&limit=${limit}&offset=${offset}`;
       return (await this.request(query)) || [];
     }
 
     async getShifts({ branchId = 'ALL', limit = 30, offset = 0 } = {}) {
+      const sid = this._requireStoreId();
       const branchClause = await this._resolveBranchFilter(branchId);
-      const filterPrefix = branchClause ? `${branchClause}&` : '';
-      const query = `/shifts?${filterPrefix}order=start_time.desc&limit=${limit}&offset=${offset}`;
+      const scopedClause = branchClause && branchClause.includes('store_id=eq.')
+        ? branchClause
+        : `store_id=eq.${sid}`;
+      const query = `/shifts?${scopedClause}&order=start_time.desc&limit=${limit}&offset=${offset}`;
       return (await this.request(query)) || [];
     }
 
@@ -836,13 +968,14 @@
       if (!username || !password) {
         throw new Error('اسم المستخدم وكلمة المرور مطلوبان');
       }
+      const sid = decodeURIComponent(this._requireStoreId());
 
       // تشفير كلمة المرور بنفس خوارزمية البرنامج المكتبي PBKDF2
       const cryptoLib = (typeof window !== 'undefined' && window.CryptoUtils) || (typeof globalThis !== 'undefined' && globalThis.CryptoUtils) || (typeof CryptoUtils !== 'undefined' && CryptoUtils);
       const hashResult = await cryptoLib.hashPassword(password);
 
       const payload = {
-        store_id: this.config.storeId,
+        store_id: sid,
         branch_id: branch_id || null,
         username: username.trim(),
         full_name: (full_name || username).trim(),
@@ -855,11 +988,15 @@
         updated_at: new Date().toISOString(),
       };
 
-      return await this.request('/staff_users', {
+      return await this.request(`/staff_users?store_id=eq.${encodeURIComponent(sid)}`, {
         method: 'POST',
         body: payload,
         headers: { 'Prefer': 'return=representation' },
       });
+    }
+
+    async addStaffUser(data) {
+      return await this.createStaffUser(data);
     }
 
     async updateStaffUser(userId, { full_name, role, branch_id, password = null }) {
@@ -910,6 +1047,17 @@
         body: payload,
         headers: { 'Prefer': 'return=representation' },
       });
+    }
+
+    async updateStaffRole(userId, roleOrPayload) {
+      const updates = typeof roleOrPayload === 'string'
+        ? { role: roleOrPayload }
+        : (roleOrPayload || {});
+      return await this.updateStaffUser(userId, updates);
+    }
+
+    async toggleStaffActive(userId, isActive) {
+      return await this.toggleStaffStatus(userId, isActive);
     }
 
     async toggleStaffStatus(userId, isActive) {
@@ -994,7 +1142,7 @@
      * @returns {Function} unsubscribe — استدعِها لإلغاء الاشتراك
      */
     subscribeRealtime(onChangeCallback) {
-      const storeId = this.config.storeId;
+      const storeId = decodeURIComponent(this._requireStoreId());
       if (!storeId || typeof WebSocket === 'undefined') {
         return () => {};
       }
@@ -1024,18 +1172,13 @@
         const ref = String(_ref++);
         const topic = `realtime:public:${table}`;
         _subs[table] = ref;
-        const hasStoreIdCol = (table === 'products' || table === 'staff_users');
-        const activeBranch = this.getActiveBranch();
+        // فرض فلتر store_id=eq.${storeId} إجبارياً على كافة الجداول الخمسة لمنع تسرب إشعارات أي متجر آخر
         const pgConfig = {
           event: '*',
           schema: 'public',
           table,
+          filter: 'store_id=eq.' + storeId,
         };
-        if (hasStoreIdCol) {
-          pgConfig.filter = `store_id=eq.${storeId}`;
-        } else if (activeBranch && activeBranch !== 'ALL') {
-          pgConfig.filter = `branch_id=eq.${activeBranch}`;
-        }
         _send({
           topic,
           event: 'phx_join',
@@ -1093,15 +1236,23 @@
 
       _connect();
 
-      // دالة إلغاء الاشتراك
-      return () => {
+      // دالة إلغاء الاشتراك وتسجيلها في قائمة القنوات النشطة
+      const unsubscribe = () => {
         _stopped = true;
         clearInterval(heartbeatTimer);
         clearTimeout(reconnectTimer);
         if (ws) {
           try { ws.close(); } catch (_) {}
+          ws = null;
+        }
+        if (this._activeRealtimeUnsubs) {
+          this._activeRealtimeUnsubs.delete(unsubscribe);
         }
       };
+      if (this._activeRealtimeUnsubs) {
+        this._activeRealtimeUnsubs.add(unsubscribe);
+      }
+      return unsubscribe;
     }
   }
 
