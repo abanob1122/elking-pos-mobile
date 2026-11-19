@@ -17,6 +17,9 @@
   let isRefreshing = false;
   let deferredPrompt = null;
   let lastSuccessfulSyncTime = null;
+  let salesCurrentPage = 0;
+  const SALES_PAGE_SIZE = 30;
+  let lastVisibilityRefreshAt = 0;
   try {
     lastSuccessfulSyncTime = localStorage.getItem('elking_pwa_last_sync') || null;
   } catch (_) {}
@@ -316,6 +319,23 @@
             decodedName = decodeURIComponent(storeName.trim());
           } catch (_) {
             decodedName = storeName.trim();
+          }
+        }
+
+        // عزل الجلسات: مقارنة الـ store_id الجديد بالمخزن مسبقاً، ومسح الجلسة والكاش فوراً عند الاختلاف
+        const prevStoreId = (localStorage.getItem('elking_pwa_store_id') || (client && client.config && client.config.storeId) || '').trim();
+        if (prevStoreId && prevStoreId !== cleanStoreId) {
+          if (client) {
+            client.clearSession();
+            client.setActiveBranch('ALL');
+          }
+          localStorage.removeItem('elking_pwa_session');
+          localStorage.removeItem('elking_pwa_active_branch');
+          localStorage.removeItem('elking_pwa_last_sync');
+          try { sessionStorage.clear(); } catch (_) {}
+          branchesCache = [];
+          if (typeof caches !== 'undefined' && caches.keys) {
+            caches.keys().then(keys => Promise.all(keys.map(k => caches.delete(k)))).catch(() => {});
           }
         }
 
@@ -687,6 +707,7 @@
     const branchSelect = el('branchFilter') || el('branchSelect');
     if (branchSelect) {
       branchSelect.addEventListener('change', () => {
+        salesCurrentPage = 0;
         if (client) client.setActiveBranch(branchSelect.value);
         refreshCurrentTab();
       });
@@ -815,19 +836,19 @@
         shiftsListEl.innerHTML = `<p class="text-xs text-slate-400 text-center py-2">لا توجد ورديات مفتوحة حالياً في هذا الفرع.</p>`;
       } else {
         shiftsListEl.innerHTML = kpis.activeShifts.map(s => `
-          <div class="bg-slate-50 dark:bg-slate-800/50 p-3 rounded-xl border border-slate-200/80 dark:border-slate-700/80 flex items-center justify-between">
-            <div class="flex items-center gap-2.5">
-              <div class="w-8 h-8 rounded-lg bg-emerald-500/10 text-emerald-500 flex items-center justify-center font-bold text-xs">
+          <div class="bg-slate-50 dark:bg-slate-800/50 p-3 rounded-xl border border-slate-200/80 dark:border-slate-700/80 flex items-center justify-between gap-2">
+            <div class="flex items-center gap-2.5 min-w-0">
+              <div class="w-8 h-8 rounded-lg bg-emerald-500/10 text-emerald-500 flex items-center justify-center font-bold text-xs shrink-0">
                 <i data-lucide="user-check" class="w-4 h-4"></i>
               </div>
-              <div>
-                <h4 class="text-xs font-bold text-slate-900 dark:text-white">${escapeHtml(s.cashier_name || s.username || 'كاشير')}</h4>
-                <p class="text-[10px] text-slate-400">بدأت: ${escapeHtml(formatDateTime(s.start_time))} • ${escapeHtml(getBranchName(s.branch_id))}</p>
+              <div class="min-w-0">
+                <h4 class="text-xs font-bold text-slate-900 dark:text-white truncate">${escapeHtml(s.cashier_name || s.username || 'كاشير')}</h4>
+                <p class="text-xs text-slate-500 dark:text-slate-400 truncate">بدأت: ${escapeHtml(formatDateTime(s.start_time))} • ${escapeHtml(getBranchName(s.branch_id))}</p>
               </div>
             </div>
-            <div class="text-left">
+            <div class="text-left shrink-0">
               <span class="text-xs font-extrabold text-emerald-600 dark:text-emerald-400 num-ltr">${formatMoney(s.total_sales || 0)}</span>
-              <span class="block text-[9px] text-slate-400">مبيعات الوردية</span>
+              <span class="block text-xs text-slate-400">مبيعات الوردية</span>
             </div>
           </div>
         `).join('');
@@ -841,12 +862,12 @@
         lowStockListEl.innerHTML = `<p class="text-xs text-slate-400 text-center py-2">المخزون في حالة ممتازة ولا توجد نواقص.</p>`;
       } else {
         lowStockListEl.innerHTML = kpis.lowStockItems.map(item => `
-          <div class="bg-slate-50 dark:bg-slate-800/50 p-2.5 rounded-xl border border-rose-200/50 dark:border-rose-900/40 flex items-center justify-between">
-            <div>
-              <h5 class="text-xs font-bold text-slate-900 dark:text-white">${escapeHtml(item.product_name || item.name || 'صنف')}</h5>
-              <p class="text-[10px] text-slate-400 num-ltr">${escapeHtml(item.barcode || 'بدون باركود')}</p>
+          <div class="bg-slate-50 dark:bg-slate-800/50 p-2.5 rounded-xl border border-rose-200/50 dark:border-rose-900/40 flex items-center justify-between gap-2">
+            <div class="min-w-0">
+              <h5 class="text-xs font-bold text-slate-900 dark:text-white truncate">${escapeHtml(item.product_name || item.name || 'صنف')}</h5>
+              <p class="text-xs text-slate-400 num-ltr font-mono truncate" dir="ltr">${escapeHtml(item.barcode || 'بدون باركود')}</p>
             </div>
-            <div class="flex items-center gap-2">
+            <div class="flex items-center gap-2 shrink-0">
               <span class="text-xs font-bold text-rose-600 dark:text-rose-400 bg-rose-500/10 px-2 py-0.5 rounded-md">
                 متبقي ${escapeHtml(item.stock)} فقط
               </span>
@@ -860,31 +881,74 @@
   // =========================================================================
   // VIEW 2: SALES & INVOICES
   // =========================================================================
+  function _getSalesDateFilterRange() {
+    const mode = el('salesDateFilter')?.value || 'ALL';
+    const cairoOffset = (days) => {
+      if (client && typeof client.getCairoOffsetDateStr === 'function') {
+        return client.getCairoOffsetDateStr(days);
+      }
+      const d = new Date(Date.now() + Number(days || 0) * 86400000);
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    };
+    if (mode === 'today') {
+      const t = cairoOffset(0);
+      return { dateFrom: t, dateTo: t };
+    }
+    if (mode === 'yesterday') {
+      const y = cairoOffset(-1);
+      return { dateFrom: y, dateTo: y };
+    }
+    if (mode === 'DAY') {
+      const picked = (el('salesDateInput')?.value || '').trim();
+      return picked ? { dateFrom: picked, dateTo: picked } : { dateFrom: null, dateTo: null };
+    }
+    if (mode === 'RANGE') {
+      const f = (el('salesDateFrom')?.value || '').trim() || null;
+      const t = (el('salesDateTo')?.value || '').trim() || null;
+      return { dateFrom: f, dateTo: t };
+    }
+    return { dateFrom: null, dateTo: null };
+  }
+
   async function renderSales(branchId) {
     const search = el('salesSearchInput')?.value || '';
-    const dateFilterVal = el('salesDateFilter')?.value || 'ALL';
-    let date = null;
-    if (dateFilterVal === 'today') {
-      const now = new Date();
-      date = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
-    } else if (dateFilterVal === 'yesterday') {
-      const y = new Date();
-      y.setDate(y.getDate() - 1);
-      date = `${y.getFullYear()}-${String(y.getMonth() + 1).padStart(2, '0')}-${String(y.getDate()).padStart(2, '0')}`;
-    } else if (dateFilterVal && dateFilterVal !== 'ALL') {
-      date = dateFilterVal;
+    const { dateFrom, dateTo } = _getSalesDateFilterRange();
+    if (dateFrom && dateTo && dateFrom > dateTo) {
+      showToast('تاريخ البداية يجب أن يكون قبل أو مساوياً لتاريخ النهاية', true);
+      return;
     }
     const paymentMethod = el('salesPaymentFilter')?.value || 'ALL';
 
-    const sales = await client.getSales({
+    const rawSales = await client.getSales({
       branchId,
-      date,
+      dateFrom,
+      dateTo,
       paymentMethod,
       search,
-      limit: 50,
+      limit: SALES_PAGE_SIZE + 1,
+      offset: salesCurrentPage * SALES_PAGE_SIZE,
     });
 
+    const hasNext = rawSales.length > SALES_PAGE_SIZE;
+    const sales = hasNext ? rawSales.slice(0, SALES_PAGE_SIZE) : rawSales;
+
     const listEl = el('invoicesList');
+    const pagBar = el('salesPaginationBar');
+    const prevBtn = el('salesPrevPageBtn');
+    const nextBtn = el('salesNextPageBtn');
+    const pageLbl = el('salesPageIndicator');
+
+    if (pagBar) {
+      if (salesCurrentPage === 0 && !hasNext) {
+        pagBar.classList.add('hidden');
+      } else {
+        pagBar.classList.remove('hidden');
+        if (prevBtn) prevBtn.disabled = salesCurrentPage <= 0;
+        if (nextBtn) nextBtn.disabled = !hasNext;
+        if (pageLbl) pageLbl.textContent = `صفحة ${salesCurrentPage + 1} (${sales.length} فاتورة)`;
+      }
+    }
+
     if (!listEl) return;
 
     if (sales.length === 0) {
@@ -913,18 +977,18 @@
 
       return `
         <div class="invoice-card bg-white dark:bg-slate-900 p-3.5 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm hover:border-blue-400 transition cursor-pointer active:scale-[0.99]" data-id="${escapeHtml(rawId)}">
-          <div class="flex items-center justify-between">
-            <div class="flex items-center gap-2">
-              <span class="text-xs font-black font-mono text-blue-600 dark:text-blue-400 num-ltr">#${escapeHtml(invoiceLabel)}</span>
-              <span class="text-[10px] font-bold px-2 py-0.5 rounded-full ${methodBadge}">${escapeHtml(method)}</span>
-              ${excluded ? `<span class="text-[10px] font-bold px-2 py-0.5 rounded-full bg-rose-500/10 text-rose-600 dark:text-rose-400">مرتجع/ملغاة</span>` : ''}
+          <div class="flex items-center justify-between gap-2">
+            <div class="flex items-center gap-2 min-w-0 flex-wrap">
+              <span class="text-xs font-black font-mono text-blue-600 dark:text-blue-400 num-ltr" dir="ltr">#${escapeHtml(invoiceLabel)}</span>
+              <span class="text-xs font-bold px-2 py-0.5 rounded-full ${methodBadge}">${escapeHtml(method)}</span>
+              ${excluded ? `<span class="text-xs font-bold px-2 py-0.5 rounded-full bg-rose-500/10 text-rose-600 dark:text-rose-400">مرتجع/ملغاة</span>` : ''}
             </div>
-            <span class="text-sm font-black ${excluded ? 'line-through text-slate-400' : 'text-slate-900 dark:text-white'} num-ltr">${formatMoney(total)}</span>
+            <span class="text-sm font-black shrink-0 ${excluded ? 'line-through text-slate-400' : 'text-slate-900 dark:text-white'} num-ltr">${formatMoney(total)}</span>
           </div>
 
-          <div class="flex items-center justify-between mt-2 pt-2 border-t border-slate-100 dark:border-slate-800/80 text-[11px] text-slate-400">
-            <span>الكاشير: <strong class="text-slate-700 dark:text-slate-300">${escapeHtml(s.cashier_username || s.cashier_name || 'كاشير')}</strong></span>
-            <span>${escapeHtml(formatDateTime(s.sale_date || s.created_at))}</span>
+          <div class="flex items-center justify-between gap-2 mt-2 pt-2 border-t border-slate-100 dark:border-slate-800/80 text-xs text-slate-400">
+            <span class="truncate min-w-0">الكاشير: <strong class="text-slate-700 dark:text-slate-300">${escapeHtml(s.cashier_username || s.cashier_name || 'كاشير')}</strong></span>
+            <span class="shrink-0">${escapeHtml(formatDateTime(s.sale_date || s.created_at))}</span>
           </div>
         </div>
       `;
@@ -1035,29 +1099,32 @@
       const stock = Number(p.stock_quantity ?? p.stock_qty ?? 0);
       const minStock = Number(p.min_stock ?? 5);
       const salePrice = Number(p.sale_price ?? p.sell_price ?? 0);
+      const minSalePrice = Number(p.min_sale_price ?? 0);
+      const maxSalePrice = Number(p.max_sale_price ?? 0);
       const costPrice = Number(p.cost_price ?? p.buy_price ?? 0);
       const isLow = stock <= minStock;
 
       return `
         <div class="bg-white dark:bg-slate-900 p-3.5 rounded-2xl border ${isLow ? 'border-amber-300 dark:border-amber-900/60' : 'border-slate-200 dark:border-slate-800'} shadow-sm flex flex-col justify-between gap-2.5">
           <div class="flex items-start justify-between gap-2">
-            <div>
-              <h4 class="text-xs font-bold text-slate-900 dark:text-white">${escapeHtml(name)}</h4>
-              <p class="text-[11px] text-slate-400 num-ltr font-mono mt-0.5">${escapeHtml(barcode)}</p>
+            <div class="min-w-0">
+              <h4 class="text-xs font-bold text-slate-900 dark:text-white truncate">${escapeHtml(name)}</h4>
+              <p class="text-xs text-slate-400 num-ltr font-mono mt-0.5 truncate" dir="ltr">${escapeHtml(barcode)}</p>
             </div>
-            <span class="text-xs font-bold px-2.5 py-0.5 rounded-full ${isLow ? 'bg-rose-500/10 text-rose-600 dark:text-rose-400' : 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'}">
+            <span class="text-xs font-bold px-2.5 py-0.5 rounded-full shrink-0 ${isLow ? 'bg-rose-500/10 text-rose-600 dark:text-rose-400' : 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'}">
               ${escapeHtml(stock)} في المخزن
             </span>
           </div>
 
-          <div class="flex items-center justify-between pt-2 border-t border-slate-100 dark:border-slate-800/80 text-xs">
-            <div class="space-x-3 space-x-reverse">
+          <div class="flex items-center justify-between gap-2 pt-2 border-t border-slate-100 dark:border-slate-800/80 text-xs">
+            <div class="min-w-0 flex flex-wrap items-center gap-x-3 gap-y-1">
               <span>سعر البيع: <strong class="text-blue-600 dark:text-blue-400 font-black num-ltr">${formatMoney(salePrice)}</strong></span>
-              <span class="text-slate-400 text-[11px]">التكلفة: <strong class="num-ltr">${formatMoney(costPrice)}</strong></span>
+              <span class="text-slate-400 text-xs">التكلفة: <strong class="num-ltr">${formatMoney(costPrice)}</strong></span>
+              ${(minSalePrice > 0 || maxSalePrice > 0) ? `<span class="text-xs text-slate-500 dark:text-slate-400 num-ltr">(${minSalePrice > 0 ? 'أدنى: ' + minSalePrice : ''}${minSalePrice > 0 && maxSalePrice > 0 ? ' / ' : ''}${maxSalePrice > 0 ? 'أقصى: ' + maxSalePrice : ''})</span>` : ''}
             </div>
 
-            <button class="edit-product-btn min-h-[44px] min-w-[44px] bg-slate-100 dark:bg-slate-800 hover:bg-blue-50 dark:hover:bg-blue-900/30 text-blue-600 dark:text-blue-400 font-bold text-[11px] px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-700 flex items-center gap-1 active:scale-95 transition"
-              data-id="${escapeHtml(p.id)}" data-name="${encodeURIComponent(name)}" data-price="${escapeHtml(salePrice)}" data-min="${escapeHtml(minStock)}">
+            <button type="button" class="edit-product-btn min-h-[44px] min-w-[44px] bg-slate-100 dark:bg-slate-800 hover:bg-blue-50 dark:hover:bg-blue-900/30 text-blue-600 dark:text-blue-400 font-bold text-xs px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-700 flex items-center gap-1 active:scale-95 transition shrink-0"
+              data-id="${escapeHtml(p.id)}" data-name="${encodeURIComponent(name)}" data-price="${escapeHtml(salePrice)}" data-min-sale="${escapeHtml(minSalePrice)}" data-max-sale="${escapeHtml(maxSalePrice)}" data-min="${escapeHtml(minStock)}">
               <i data-lucide="edit-2" class="w-3.5 h-3.5"></i>
               <span>تعديل السعر</span>
             </button>
@@ -1071,12 +1138,16 @@
       btn.addEventListener('click', () => {
         const id = btn.getAttribute('data-id');
         const name = decodeURIComponent(btn.getAttribute('data-name') || '');
-        const price = btn.getAttribute('data-price');
-        const minStockVal = btn.getAttribute('data-min');
+        const price = btn.getAttribute('data-price') || '0';
+        const minSale = btn.getAttribute('data-min-sale') || '0';
+        const maxSale = btn.getAttribute('data-max-sale') || '0';
+        const minStockVal = btn.getAttribute('data-min') || '5';
 
         const eId = el('editProductId'); if (eId) eId.value = id;
         const eName = el('editProductName'); if (eName) eName.value = name;
         const ePrice = el('editProductSalePrice'); if (ePrice) ePrice.value = price;
+        const eMinSale = el('editProductMinSalePrice'); if (eMinSale) eMinSale.value = minSale;
+        const eMaxSale = el('editProductMaxSalePrice'); if (eMaxSale) eMaxSale.value = maxSale;
         const eMin = el('editProductMinStock'); if (eMin) eMin.value = minStockVal;
 
         const productModal = el('productModal');
@@ -1196,7 +1267,8 @@
     }
 
     listEl.innerHTML = shifts.map(s => {
-      const isOpen = !s.end_time || String(s.status).toLowerCase() === 'open' || String(s.status).includes('مفتوح');
+      const stNorm = String(s.status || '').trim().toLowerCase();
+      const isOpen = (stNorm === 'open' || stNorm.includes('مفتوح')) && !s.end_time;
       const openingCash = Number(s.opening_cash ?? s.starting_cash ?? 0);
       const cashReturns = Number(s.cash_returns || 0);
       let sales = Number(s.total_sales || 0);
@@ -1303,23 +1375,23 @@
 
       return `
         <div class="bg-white dark:bg-slate-900 p-3.5 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm flex items-center justify-between gap-3">
-          <div class="flex items-center gap-3">
-            <div class="w-10 h-10 rounded-xl ${isActive ? 'bg-blue-500/10 text-blue-500' : 'bg-slate-200 dark:bg-slate-800 text-slate-400'} flex items-center justify-center font-black text-sm">
+          <div class="flex items-center gap-3 min-w-0">
+            <div class="w-10 h-10 rounded-xl shrink-0 ${isActive ? 'bg-blue-500/10 text-blue-500' : 'bg-slate-200 dark:bg-slate-800 text-slate-400'} flex items-center justify-center font-black text-sm">
               ${escapeHtml(initialChar)}
             </div>
-            <div>
-              <div class="flex items-center gap-2">
-                <h4 class="text-xs font-bold text-slate-900 dark:text-white">${escapeHtml(u.full_name || u.username)}</h4>
-                <span class="text-[9px] bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 font-bold px-1.5 py-0.5 rounded">${escapeHtml(role)}</span>
+            <div class="min-w-0">
+              <div class="flex items-center gap-2 min-w-0">
+                <h4 class="text-xs font-bold text-slate-900 dark:text-white truncate">${escapeHtml(u.full_name || u.username)}</h4>
+                <span class="text-xs bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 font-bold px-1.5 py-0.5 rounded shrink-0">${escapeHtml(role)}</span>
               </div>
-              <p class="text-[10px] text-slate-400 mt-0.5">
-                <span class="font-mono">@${escapeHtml(u.username)}</span> • ${escapeHtml(branchName)}
+              <p class="text-xs text-slate-400 mt-0.5 truncate">
+                <span class="font-mono" dir="ltr">@${escapeHtml(u.username)}</span> • ${escapeHtml(branchName)}
               </p>
             </div>
           </div>
 
           <!-- Actions & Toggle (gap-3 = 12px touch spacing, min 44x44px targets) -->
-          <div class="flex items-center gap-3">
+          <div class="flex items-center gap-3 shrink-0">
             <!-- Active Toggle Button -->
             <button class="toggle-staff-btn min-h-[44px] min-w-[44px] text-xs font-bold px-3 py-2 rounded-xl transition flex items-center gap-1.5 active:scale-95 ${isActive ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20' : 'bg-rose-500/10 text-rose-600 dark:text-rose-400 border border-rose-500/20'}"
               data-id="${escapeHtml(u.id)}" data-active="${isActive}">
@@ -1412,16 +1484,43 @@
       el('productModal')?.classList.add('hidden');
     });
 
-    // Product Form Submit
+    // Product Form Submit (تعديل السعر الطبيعي + الأدنى + الأقصى + حد الطلب مع التحقق الصارم)
     el('editProductForm')?.addEventListener('submit', async (e) => {
       e.preventDefault();
       const id = el('editProductId')?.value;
-      const sale_price = parseFloat(el('editProductSalePrice')?.value || '0');
-      const min_stock = parseInt(el('editProductMinStock')?.value || '0', 10);
+      const sale_price = parseFloat(el('editProductSalePrice')?.value ?? '');
+      const min_sale_price = parseFloat(el('editProductMinSalePrice')?.value ?? '0');
+      const max_sale_price = parseFloat(el('editProductMaxSalePrice')?.value ?? '0');
+      const min_stock = parseInt(el('editProductMinStock')?.value ?? '0', 10);
+
+      if (isNaN(sale_price) || isNaN(min_sale_price) || isNaN(max_sale_price) || isNaN(min_stock)) {
+        showToast('يرجى إدخال أرقام صحيحة في جميع الحقول', true);
+        return;
+      }
+      if (sale_price < 0 || min_sale_price < 0 || max_sale_price < 0 || min_stock < 0) {
+        showToast('القيم السالبة غير مسموحة', true);
+        return;
+      }
+      if (sale_price <= 0) {
+        showToast('سعر البيع الطبيعي يجب أن يكون أكبر من صفر', true);
+        return;
+      }
+      if (min_sale_price > 0 && min_sale_price > sale_price) {
+        showToast('الحد الأدنى للبيع لا يمكن أن يتجاوز سعر البيع الطبيعي', true);
+        return;
+      }
+      if (max_sale_price > 0 && sale_price > max_sale_price) {
+        showToast('سعر البيع الطبيعي لا يمكن أن يتجاوز الحد الأقصى للبيع', true);
+        return;
+      }
+      if (min_sale_price > 0 && max_sale_price > 0 && min_sale_price > max_sale_price) {
+        showToast('الحد الأدنى للبيع لا يمكن أن يكون أكبر من الحد الأقصى للبيع', true);
+        return;
+      }
 
       try {
-        await client.updateProduct(id, { sale_price, min_stock });
-        showToast('تم حفظ ومزامنة سعر وبيانات الصنف فورياً');
+        await client.updateProduct(id, { sale_price, min_sale_price, max_sale_price, min_stock });
+        showToast('تم حفظ ومزامنة أسعار وبيانات الصنف فورياً');
         el('productModal')?.classList.add('hidden');
         await renderInventory(client.getActiveBranch());
       } catch (err) {
@@ -1526,13 +1625,74 @@
     }
 
     // Filter listeners for Sales & Inventory with 350ms debounce on search inputs
-    const debouncedRenderSales = debounce(() => renderSales(client.getActiveBranch()), 350);
+    const _syncSalesDatePickersVisibility = () => {
+      const mode = el('salesDateFilter')?.value || 'ALL';
+      const dayBox = el('salesDayContainer');
+      const rangeBox = el('salesRangeContainer');
+      const todayCairo = (client && typeof client.getCairoDateStr === 'function')
+        ? client.getCairoDateStr(new Date())
+        : new Date().toISOString().slice(0, 10);
+
+      if (dayBox) {
+        if (mode === 'DAY') {
+          dayBox.classList.remove('hidden');
+          const dInp = el('salesDateInput');
+          if (dInp && !dInp.value) dInp.value = todayCairo;
+        } else {
+          dayBox.classList.add('hidden');
+        }
+      }
+      if (rangeBox) {
+        if (mode === 'RANGE') {
+          rangeBox.classList.remove('hidden');
+          const fInp = el('salesDateFrom');
+          const tInp = el('salesDateTo');
+          if (fInp && !fInp.value) fInp.value = todayCairo;
+          if (tInp && !tInp.value) tInp.value = todayCairo;
+        } else {
+          rangeBox.classList.add('hidden');
+        }
+      }
+    };
+
+    const debouncedRenderSales = debounce(() => {
+      salesCurrentPage = 0;
+      renderSales(client.getActiveBranch());
+    }, 350);
     const debouncedRenderInventory = debounce(() => renderInventory(client.getActiveBranch()), 350);
 
     el('salesSearchInput')?.addEventListener('input', debouncedRenderSales);
-    el('salesDateFilter')?.addEventListener('change', () => renderSales(client.getActiveBranch()));
-    el('salesDateInput')?.addEventListener('change', () => renderSales(client.getActiveBranch()));
-    el('salesPaymentFilter')?.addEventListener('change', () => renderSales(client.getActiveBranch()));
+    el('salesDateFilter')?.addEventListener('change', () => {
+      salesCurrentPage = 0;
+      _syncSalesDatePickersVisibility();
+      renderSales(client.getActiveBranch());
+    });
+    el('salesDateInput')?.addEventListener('change', () => {
+      salesCurrentPage = 0;
+      renderSales(client.getActiveBranch());
+    });
+    el('salesDateFrom')?.addEventListener('change', () => {
+      salesCurrentPage = 0;
+      renderSales(client.getActiveBranch());
+    });
+    el('salesDateTo')?.addEventListener('change', () => {
+      salesCurrentPage = 0;
+      renderSales(client.getActiveBranch());
+    });
+    el('salesPaymentFilter')?.addEventListener('change', () => {
+      salesCurrentPage = 0;
+      renderSales(client.getActiveBranch());
+    });
+    el('salesPrevPageBtn')?.addEventListener('click', () => {
+      if (salesCurrentPage > 0) {
+        salesCurrentPage -= 1;
+        renderSales(client.getActiveBranch());
+      }
+    });
+    el('salesNextPageBtn')?.addEventListener('click', () => {
+      salesCurrentPage += 1;
+      renderSales(client.getActiveBranch());
+    });
 
     el('inventorySearchInput')?.addEventListener('input', debouncedRenderInventory);
     el('lowStockOnlyToggle')?.addEventListener('change', () => renderInventory(client.getActiveBranch()));
@@ -1589,27 +1749,41 @@
     }
 
     _realtimeUnsubscribe = client.subscribeRealtime((table, eventType, record) => {
-      // جمع الجداول المتغيرة وانتظار 800ms قبل إعادة التحميل (Debounce)
+      // تجميع الجداول المتغيرة مع Debounce 500ms ثم تحديث التبويب المفتوح حالياً فقط عند صلته بالتغيير
       _realtimePendingTables.add(table);
       clearTimeout(_realtimeDebounceTimer);
       _realtimeDebounceTimer = setTimeout(() => {
         const tables = new Set(_realtimePendingTables);
         _realtimePendingTables.clear();
 
-        const tab = currentTab;
-        if (tables.has('sales') && (tab === 'dashboard' || tab === 'sales')) {
-          refreshCurrentTab();
-        } else if ((tables.has('shifts') || tables.has('treasury_logs')) && (tab === 'dashboard' || tab === 'treasury')) {
-          refreshCurrentTab();
-        } else if (tables.has('products') && (tab === 'dashboard' || tab === 'inventory')) {
-          refreshCurrentTab();
-        } else if (tables.has('staff_users')) {
-          // تحقق من حالة المستخدم المسجّل — طرد فوري إذا عُطِّل من الموبايل
+        if (tables.has('staff_users')) {
           _checkCurrentUserStatus();
-        } else {
+        }
+
+        const tab = currentTab;
+        const shouldRefreshTab =
+          (tab === 'dashboard' && (tables.has('sales') || tables.has('shifts') || tables.has('treasury_logs') || tables.has('products'))) ||
+          (tab === 'sales' && tables.has('sales')) ||
+          (tab === 'inventory' && tables.has('products')) ||
+          (tab === 'treasury' && (tables.has('shifts') || tables.has('treasury_logs'))) ||
+          (tab === 'staff' && tables.has('staff_users'));
+
+        if (shouldRefreshTab) {
           refreshCurrentTab();
         }
-      }, 800);
+      }, 500);
+    });
+  }
+
+  function setupVisibilityAutoRefresh() {
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden && client && client.isLoggedIn()) {
+        const nowMs = Date.now();
+        if (nowMs - lastVisibilityRefreshAt >= 2000) {
+          lastVisibilityRefreshAt = nowMs;
+          refreshCurrentTab();
+        }
+      }
     });
   }
 
@@ -1685,6 +1859,7 @@
     try { setupNavigation(); } catch (e) { console.debug('setupNavigation error:', e); }
     try { setupModalsAndForms(); } catch (e) { console.debug('setupModalsAndForms error:', e); }
     try { setupVirtualKeyboardScroll(); } catch (e) { console.debug('setupVirtualKeyboardScroll error:', e); }
+    try { setupVisibilityAutoRefresh(); } catch (e) { console.debug('setupVisibilityAutoRefresh error:', e); }
     try { setupPwaInstall(); } catch (e) { console.debug('setupPwaInstall error:', e); }
     try { triggerIcons(); } catch (e) { console.debug('triggerIcons error:', e); }
     try { checkAuth(); } catch (e) { console.debug('checkAuth error:', e); }

@@ -59,14 +59,120 @@
   function isSaleExcluded(sale) {
     if (!sale) return true;
     const st = String(sale.status || '').toLowerCase().trim();
+    const invNo = String(sale.invoice_no || '').trim().toUpperCase();
     return (
       st === 'cancelled' ||
       st === 'voided' ||
       st === 'ملغاة' ||
       st === 'ملغي' ||
       st === 'مرتجع' ||
-      sale.is_returned === true
+      sale.is_returned === true ||
+      sale.is_deleted === true ||
+      invNo.startsWith('RET-') ||
+      (sale.net_total !== undefined && sale.net_total !== null && Number(sale.net_total) < 0)
     );
+  }
+
+  /**
+   * دوال التوقيت الموحد لمصر (Africa/Cairo) وحساب النطاق نصف المفتوح [start, next_day_start) بـ UTC
+   */
+  const CAIRO_TZ = 'Africa/Cairo';
+
+  function _formatYmdInCairo(dateObj) {
+    try {
+      const parts = new Intl.DateTimeFormat('en-CA', {
+        timeZone: CAIRO_TZ,
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+      }).formatToParts(dateObj);
+      const map = {};
+      for (const p of parts) {
+        if (p.type !== 'literal') map[p.type] = p.value;
+      }
+      if (map.year && map.month && map.day) {
+        return `${map.year}-${map.month}-${map.day}`;
+      }
+    } catch (_) {}
+    // احتياطي UTC+2 في البيئات التي لا تدعم ICU
+    const shifted = new Date(dateObj.getTime() + 2 * 3600 * 1000);
+    const y = shifted.getUTCFullYear();
+    const m = String(shifted.getUTCMonth() + 1).padStart(2, '0');
+    const d = String(shifted.getUTCDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  }
+
+  function getCairoDateStr(dateObj = new Date()) {
+    return _formatYmdInCairo(dateObj instanceof Date ? dateObj : new Date(dateObj));
+  }
+
+  function _addDaysToYmd(ymdStr, days) {
+    const [y, m, d] = String(ymdStr).split('-').map(Number);
+    const dt = new Date(Date.UTC(y, m - 1, d + Number(days || 0), 0, 0, 0, 0));
+    const yy = dt.getUTCFullYear();
+    const mm = String(dt.getUTCMonth() + 1).padStart(2, '0');
+    const dd = String(dt.getUTCDate()).padStart(2, '0');
+    return `${yy}-${mm}-${dd}`;
+  }
+
+  function getCairoOffsetDateStr(daysOffset = 0) {
+    const todayCairo = getCairoDateStr(new Date());
+    return _addDaysToYmd(todayCairo, daysOffset);
+  }
+
+  function _getCairoOffsetMs(utcDate) {
+    try {
+      const parts = new Intl.DateTimeFormat('en-GB', {
+        timeZone: CAIRO_TZ,
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: false,
+      }).formatToParts(utcDate);
+      const map = {};
+      for (const p of parts) {
+        if (p.type !== 'literal') map[p.type] = p.value;
+      }
+      const hr = map.hour === '24' ? '00' : map.hour;
+      const wallAsUtc = Date.UTC(
+        Number(map.year),
+        Number(map.month) - 1,
+        Number(map.day),
+        Number(hr),
+        Number(map.minute),
+        Number(map.second),
+        0
+      );
+      return wallAsUtc - utcDate.getTime();
+    } catch (_) {
+      return 2 * 3600 * 1000;
+    }
+  }
+
+  function cairoMidnightToUtcDate(ymdStr) {
+    const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(ymdStr || '').trim());
+    if (!match) {
+      throw new Error(`صيغة التاريخ غير صالحة: ${ymdStr}`);
+    }
+    const nominalUtc = Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]), 0, 0, 0, 0);
+    const off1 = _getCairoOffsetMs(new Date(nominalUtc));
+    const cand1 = nominalUtc - off1;
+    const off2 = _getCairoOffsetMs(new Date(cand1));
+    return new Date(nominalUtc - off2);
+  }
+
+  function getCairoRangeUtc(dateFrom, dateTo) {
+    const cleanFrom = dateFrom ? String(dateFrom).trim() : null;
+    const cleanTo = dateTo ? String(dateTo).trim() : null;
+    if (cleanFrom && cleanTo && cleanFrom > cleanTo) {
+      throw new Error('تاريخ البداية يجب أن يكون قبل أو مساوياً لتاريخ النهاية');
+    }
+    const startIso = cleanFrom ? cairoMidnightToUtcDate(cleanFrom).toISOString() : null;
+    const endExclusiveIso = cleanTo ? cairoMidnightToUtcDate(_addDaysToYmd(cleanTo, 1)).toISOString() : null;
+    return { startIso, endExclusiveIso };
   }
 
   /**
@@ -176,7 +282,7 @@
   const DEFAULT_CONFIG = {
     url: DEFAULT_SUPABASE_URL,
     anonKey: DEFAULT_SUPABASE_ANON_KEY,
-    storeId: 'bc04f845-d4c8-4786-b655-907adbd2d03e',
+    storeId: '',
     storeName: 'إلكينج POS',
   };
 
@@ -247,9 +353,22 @@
     }
 
     /**
+     * التحقق الإلزامي من وجود store_id صالح قبل إرسال أي طلب إلى Supabase
+     */
+    _requireStoreId() {
+      const sid = (this.config && this.config.storeId ? String(this.config.storeId).trim() : '');
+      if (!sid) {
+        throw new Error('معرّف المتجر (Store ID) غير محدد — امسح الـ QR Code أو أدخل معرّف المتجر أولاً');
+      }
+      return encodeURIComponent(sid);
+    }
+
+    /**
      * تنفيذ طلب HTTP موحد ضد Supabase PostgREST
      */
     async request(endpoint, options = {}) {
+      // منع تماماً إرسال أي طلب جلب أو تعديل بيانات إذا كان storeId فارغاً
+      this._requireStoreId();
       const url = `${this.config.url.replace(/\/+$/, '')}/rest/v1${endpoint.startsWith('/') ? '' : '/'}${endpoint}`;
       const headers = {
         'apikey': this.config.anonKey,
@@ -373,20 +492,21 @@
     // الفروع والمتجر
     // =========================================================================
     async getBranches() {
-      const query = `/branches?store_id=eq.${this.config.storeId}&order=is_main.desc,name.asc`;
+      const sid = this._requireStoreId();
+      const query = `/branches?store_id=eq.${sid}&order=is_main.desc,name.asc`;
       const branches = (await this.request(query)) || [];
       this._branchesCache = branches;
       return branches;
     }
 
     /**
-     * بناء فلتر الفرع لجداول sales, shifts, treasury_logs (التي لا تحتوي على عمود store_id)
-     * عند اختيار فرع محدد: branch_id=eq.${branchId}
-     * عند اختيار 'ALL': جلب فروع المتجر واستخدام branch_id=in.(...) مع تراجع آمن
+     * بناء فلتر العزل الصارم (store_id + branch_id) لجداول sales, shifts, treasury_logs
+     * يفرض دائماً store_id=eq.${storeId} لمنع تسرب أي بيانات لمتجر آخر
      */
     async _resolveBranchFilter(branchId = 'ALL') {
+      const sid = this._requireStoreId();
       if (branchId && branchId !== 'ALL') {
-        return `branch_id=eq.${branchId}`;
+        return `store_id=eq.${sid}&branch_id=eq.${encodeURIComponent(branchId)}`;
       }
       try {
         const branches = Array.isArray(this._branchesCache) && this._branchesCache.length > 0
@@ -394,14 +514,15 @@
           : await this.getBranches();
         const branchIds = (branches || []).map(b => b && b.id).filter(Boolean);
         if (branchIds.length > 0) {
-          return `branch_id=in.(${branchIds.join(',')})`;
+          return `store_id=eq.${sid}&branch_id=in.(${branchIds.join(',')})`;
         }
       } catch (_) {}
-      return '';
+      return `store_id=eq.${sid}`;
     }
 
     async getStoreInfo() {
-      const query = `/stores?id=eq.${this.config.storeId}&limit=1`;
+      const sid = this._requireStoreId();
+      const query = `/stores?id=eq.${sid}&limit=1`;
       const stores = await this.request(query);
       return stores && stores.length > 0 ? stores[0] : null;
     }
@@ -410,19 +531,19 @@
     // المؤشرات الرئيسية ولوحة المعلومات (Dashboard KPIs)
     // =========================================================================
     async getDashboardKPIs(branchId = 'ALL') {
-      const now = new Date();
-      // حساب بداية ونهاية "اليوم" حسب التوقيت المحلي للمتصفح (وليس UTC لمنع ترحيل اليوم بعد منتصف الليل)
-      const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
-      const endOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
+      // حساب بداية اليوم ونهايته صراحةً بتوقيت مصر (Africa/Cairo) ثم تحويلهما لنطاق نصف مفتوح [start, next_day_start) بـ UTC
+      const todayCairo = getCairoDateStr(new Date());
+      const { startIso, endExclusiveIso } = getCairoRangeUtc(todayCairo, todayCairo);
 
+      const sid = this._requireStoreId();
       const resolvedBranchClause = await this._resolveBranchFilter(branchId);
-      const branchQueryPrefix = resolvedBranchClause ? `${resolvedBranchClause}&` : '';
-      const productBranchFilter = (branchId && branchId !== 'ALL') ? `&branch_id=eq.${branchId}` : '';
+      const branchQueryPrefix = resolvedBranchClause ? `${resolvedBranchClause}&` : `store_id=eq.${sid}&`;
+      const productBranchFilter = (branchId && branchId !== 'ALL') ? `&branch_id=eq.${encodeURIComponent(branchId)}` : '';
 
-      const salesQuery = `/sales?${branchQueryPrefix}sale_date=gte.${startOfDay.toISOString()}&sale_date=lte.${endOfDay.toISOString()}&order=sale_date.desc`;
-      const treasuryQuery = `/treasury_logs?${branchQueryPrefix}created_at=gte.${startOfDay.toISOString()}&created_at=lte.${endOfDay.toISOString()}`;
-      const shiftsQuery = `/shifts?${branchQueryPrefix}or=(status.eq.Open,status.eq.مفتوحة,end_time.is.null)&order=start_time.desc`;
-      const lowStockQuery = `/products?store_id=eq.${this.config.storeId}${productBranchFilter}&is_active=eq.true&limit=5000`;
+      const salesQuery = `/sales?${branchQueryPrefix}sale_date=gte.${startIso}&sale_date=lt.${endExclusiveIso}&or=(is_deleted.is.null,is_deleted.eq.false)&order=sale_date.desc`;
+      const treasuryQuery = `/treasury_logs?${branchQueryPrefix}created_at=gte.${startIso}&created_at=lt.${endExclusiveIso}`;
+      const shiftsQuery = `/shifts?${branchQueryPrefix}status=eq.Open&end_time=is.null&order=start_time.desc`;
+      const lowStockQuery = `/products?store_id=eq.${sid}${productBranchFilter}&is_active=eq.true&or=(is_deleted.is.null,is_deleted.eq.false)&limit=5000`;
 
       // جلب كافة بيانات لوحة التحكم على التوازي عبر Promise.allSettled
       const [salesRes, treasuryRes, shiftsRes, productsRes] = await Promise.allSettled([
@@ -441,26 +562,8 @@
         throw salesRes.reason || new Error('تعذر الاتصال بالخادم السحابي');
       }
 
-      // 1. مبيعات اليوم
-      let sales = (salesRes.status === 'fulfilled' && salesRes.value) ? salesRes.value : [];
-
-      // إذا لم توجد فواتير بنطاق ISO الصريح، نجلب أحدث الفواتير ونفلتر حسب تاريخ اليوم المحلي كحماية إضافية
-      if (sales.length === 0 && salesRes.status === 'fulfilled') {
-        try {
-          const recent = (await this.request(`/sales?${branchQueryPrefix}order=sale_date.desc&limit=100`)) || [];
-          sales = recent.filter(s => {
-            const dtStr = s.sale_date || s.created_at;
-            if (!dtStr) return false;
-            const d = new Date(dtStr);
-            return !isNaN(d.getTime()) &&
-                   d.getFullYear() === now.getFullYear() &&
-                   d.getMonth() === now.getMonth() &&
-                   d.getDate() === now.getDate();
-          });
-        } catch (_) {}
-      }
-
-      // استبعاد الفواتير الملغاة أو المرتجعة (cancelled / voided / is_returned)
+      // 1. مبيعات اليوم بتوقيت مصر (استبعاد الملغاة والمرتجعة بالكامل والمحذوفة)
+      const sales = (salesRes.status === 'fulfilled' && salesRes.value) ? salesRes.value : [];
       const validSales = sales.filter(s => !isSaleExcluded(s));
 
       let totalSales = 0;
@@ -507,19 +610,7 @@
       let totalExpenses = 0;
       const seenExpenseKeys = new Set();
       try {
-        let logs = (treasuryRes.status === 'fulfilled' && treasuryRes.value) ? treasuryRes.value : [];
-        if (logs.length === 0 && treasuryRes.status === 'fulfilled') {
-          const recentLogs = (await this.request(`/treasury_logs?${branchQueryPrefix}order=created_at.desc&limit=100`)) || [];
-          logs = recentLogs.filter(l => {
-            const dtStr = l.created_at;
-            if (!dtStr) return false;
-            const d = new Date(dtStr);
-            return !isNaN(d.getTime()) &&
-                   d.getFullYear() === now.getFullYear() &&
-                   d.getMonth() === now.getMonth() &&
-                   d.getDate() === now.getDate();
-          });
-        }
+        const logs = (treasuryRes.status === 'fulfilled' && treasuryRes.value) ? treasuryRes.value : [];
         for (const l of logs) {
           if (isActualExpense(l)) {
             const absAmt = Math.abs(Number(l.amount || 0));
@@ -623,20 +714,19 @@
     // =========================================================================
     // المبيعات والفواتير (Sales & Invoices)
     // =========================================================================
-    async getSales({ branchId = 'ALL', date = null, paymentMethod = null, search = '', limit = 50, offset = 0 } = {}) {
+    async getSales({ branchId = 'ALL', date = null, dateFrom = null, dateTo = null, paymentMethod = null, search = '', limit = 50, offset = 0 } = {}) {
       const filters = [];
+      const sid = this._requireStoreId();
       const branchClause = await this._resolveBranchFilter(branchId);
-      if (branchClause) {
-        filters.push(branchClause);
-      }
+      filters.push(branchClause || `store_id=eq.${sid}`);
+      filters.push('or=(is_deleted.is.null,is_deleted.eq.false)');
 
-      if (date) {
-        const dayStart = new Date(date);
-        dayStart.setHours(0, 0, 0, 0);
-        const dayEnd = new Date(date);
-        dayEnd.setHours(23, 59, 59, 999);
-        filters.push(`sale_date=gte.${dayStart.toISOString()}`);
-        filters.push(`sale_date=lte.${dayEnd.toISOString()}`);
+      const effectiveFrom = dateFrom || date || null;
+      const effectiveTo = dateTo || date || null;
+      if (effectiveFrom || effectiveTo) {
+        const { startIso, endExclusiveIso } = getCairoRangeUtc(effectiveFrom, effectiveTo);
+        if (startIso) filters.push(`sale_date=gte.${startIso}`);
+        if (endExclusiveIso) filters.push(`sale_date=lt.${endExclusiveIso}`);
       }
 
       if (paymentMethod && paymentMethod !== 'ALL') {
@@ -668,7 +758,8 @@
 
     async getSaleDetails(saleId) {
       if (!saleId) return [];
-      const query = `/sale_items?sale_id=eq.${saleId}&order=id.asc`;
+      const sid = this._requireStoreId();
+      const query = `/sale_items?store_id=eq.${sid}&sale_id=eq.${encodeURIComponent(saleId)}&order=id.asc`;
       return (await this.request(query)) || [];
     }
 
@@ -676,7 +767,7 @@
     // المخزون والأصناف (Inventory & Products)
     // =========================================================================
     async getProducts({ branchId = 'ALL', search = '', lowStockOnly = false, limit = 100, offset = 0 } = {}) {
-      let filters = [`store_id=eq.${this.config.storeId}`, 'is_active=eq.true'];
+      let filters = [`store_id=eq.${this._requireStoreId()}`, 'is_active=eq.true', 'or=(is_deleted.is.null,is_deleted.eq.false)'];
 
       if (branchId && branchId !== 'ALL') {
         // جميع الأصناف مرتبطة بفرع محدد (branch_id NOT NULL في المخطط)
@@ -709,7 +800,7 @@
         ...updates,
         updated_at: new Date().toISOString(),
       };
-      return await this.request(`/products?id=eq.${productId}`, {
+      return await this.request(`/products?id=eq.${encodeURIComponent(productId)}&store_id=eq.${this._requireStoreId()}`, {
         method: 'PATCH',
         body: payload,
         headers: { 'Prefer': 'return=representation' },
@@ -737,7 +828,7 @@
     // إدارة الموظفين والمستخدمين (Staff Management)
     // =========================================================================
     async getStaffUsers() {
-      const query = `/staff_users?store_id=eq.${this.config.storeId}&is_deleted=eq.false&order=role.asc,username.asc`;
+      const query = `/staff_users?store_id=eq.${this._requireStoreId()}&is_deleted=eq.false&order=role.asc,username.asc`;
       return (await this.request(query)) || [];
     }
 
@@ -788,7 +879,7 @@
         payload.password_hash = hashResult.combined;
       }
 
-      return await this.request(`/staff_users?id=eq.${userId}`, {
+      return await this.request(`/staff_users?id=eq.${encodeURIComponent(userId)}&store_id=eq.${this._requireStoreId()}`, {
         method: 'PATCH',
         body: payload,
         headers: { 'Prefer': 'return=representation' },
@@ -797,7 +888,7 @@
 
     async toggleStaffStatus(userId, isActive) {
       if (!userId) throw new Error('معرف المستخدم مطلوب');
-      return await this.request(`/staff_users?id=eq.${userId}`, {
+      return await this.request(`/staff_users?id=eq.${encodeURIComponent(userId)}&store_id=eq.${this._requireStoreId()}`, {
         method: 'PATCH',
         body: {
           is_active: Boolean(isActive),
@@ -810,7 +901,7 @@
     async deleteStaffUser(userId) {
       if (!userId) throw new Error('معرف المستخدم مطلوب');
       // حذف منطقي Soft Delete
-      return await this.request(`/staff_users?id=eq.${userId}`, {
+      return await this.request(`/staff_users?id=eq.${encodeURIComponent(userId)}&store_id=eq.${this._requireStoreId()}`, {
         method: 'PATCH',
         body: {
           is_deleted: true,
@@ -953,6 +1044,9 @@
   clientInstance.getSaleCashAmount = getSaleCashAmount;
   clientInstance.isActualExpense = isActualExpense;
   clientInstance.isShiftFeed = isShiftFeed;
+  clientInstance.getCairoDateStr = getCairoDateStr;
+  clientInstance.getCairoOffsetDateStr = getCairoOffsetDateStr;
+  clientInstance.getCairoRangeUtc = getCairoRangeUtc;
 
   if (typeof window !== 'undefined') {
     window.SupabaseClient = clientInstance;
@@ -962,6 +1056,9 @@
     window.getSaleCashAmount = getSaleCashAmount;
     window.isActualExpense = isActualExpense;
     window.isShiftFeed = isShiftFeed;
+    window.getCairoDateStr = getCairoDateStr;
+    window.getCairoOffsetDateStr = getCairoOffsetDateStr;
+    window.getCairoRangeUtc = getCairoRangeUtc;
   }
   if (typeof module !== 'undefined' && module.exports) {
     module.exports = clientInstance;
@@ -972,5 +1069,8 @@
     module.exports.getSaleCashAmount = getSaleCashAmount;
     module.exports.isActualExpense = isActualExpense;
     module.exports.isShiftFeed = isShiftFeed;
+    module.exports.getCairoDateStr = getCairoDateStr;
+    module.exports.getCairoOffsetDateStr = getCairoOffsetDateStr;
+    module.exports.getCairoRangeUtc = getCairoRangeUtc;
   }
 })(typeof window !== 'undefined' ? window : globalThis);
