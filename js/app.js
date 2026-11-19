@@ -1367,9 +1367,18 @@
       return;
     }
 
+    const isAdminRoleStr = (r) => {
+      const n = String(r || '').trim().toLowerCase();
+      return ['admin', 'manager', 'owner', 'مدير', 'ادمن', 'صاحب المحل', 'المسؤول'].includes(n);
+    };
+    const activeAdminsCount = staff.filter(u => Boolean(u.is_active) && !Boolean(u.is_deleted) && isAdminRoleStr(u.role)).length;
+
     listEl.innerHTML = staff.map(u => {
       const isActive = Boolean(u.is_active);
       const role = u.role || 'Cashier';
+      const isProtected = Boolean(u.is_protected_admin);
+      const isLastAdmin = isActive && !Boolean(u.is_deleted) && isAdminRoleStr(role) && activeAdminsCount <= 1;
+      const lockProtectedUi = isProtected || isLastAdmin;
       const branchName = getBranchName(u.branch_id);
       const initialChar = (u.full_name || u.username || 'م').substring(0, 1);
 
@@ -1383,6 +1392,7 @@
               <div class="flex items-center gap-2 min-w-0">
                 <h4 class="text-xs font-bold text-slate-900 dark:text-white truncate">${escapeHtml(u.full_name || u.username)}</h4>
                 <span class="text-xs bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 font-bold px-1.5 py-0.5 rounded shrink-0">${escapeHtml(role)}</span>
+                ${lockProtectedUi ? `<span class="text-xs bg-amber-500/10 text-amber-600 dark:text-amber-400 font-bold px-1.5 py-0.5 rounded shrink-0">🛡️ ${isProtected ? 'رئيسي محمي' : 'آخر مدير'}</span>` : ''}
               </div>
               <p class="text-xs text-slate-400 mt-0.5 truncate">
                 <span class="font-mono" dir="ltr">@${escapeHtml(u.username)}</span> • ${escapeHtml(branchName)}
@@ -1392,12 +1402,20 @@
 
           <!-- Actions & Toggle (gap-3 = 12px touch spacing, min 44x44px targets) -->
           <div class="flex items-center gap-3 shrink-0">
-            <!-- Active Toggle Button -->
-            <button class="toggle-staff-btn min-h-[44px] min-w-[44px] text-xs font-bold px-3 py-2 rounded-xl transition flex items-center gap-1.5 active:scale-95 ${isActive ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20' : 'bg-rose-500/10 text-rose-600 dark:text-rose-400 border border-rose-500/20'}"
-              data-id="${escapeHtml(u.id)}" data-active="${isActive}">
-              <span class="w-1.5 h-1.5 rounded-full ${isActive ? 'bg-emerald-500' : 'bg-rose-500'}"></span>
-              <span>${isActive ? 'نشط' : 'معطّل'}</span>
-            </button>
+            <!-- Active Toggle Button (معطّل للمدير المحمي وآخر Admin نشط) -->
+            ${lockProtectedUi && isActive ? `
+              <button type="button" disabled title="لا يمكن تعطيل حساب المدير المحمي أو آخر مدير نشط"
+                class="min-h-[44px] min-w-[44px] text-xs font-bold px-3 py-2 rounded-xl flex items-center gap-1.5 bg-emerald-500/10 text-emerald-600/60 dark:text-emerald-400/60 border border-emerald-500/20 opacity-60 cursor-not-allowed">
+                <span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
+                <span>محمي</span>
+              </button>
+            ` : `
+              <button class="toggle-staff-btn min-h-[44px] min-w-[44px] text-xs font-bold px-3 py-2 rounded-xl transition flex items-center gap-1.5 active:scale-95 ${isActive ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20' : 'bg-rose-500/10 text-rose-600 dark:text-rose-400 border border-rose-500/20'}"
+                data-id="${escapeHtml(u.id)}" data-active="${isActive}">
+                <span class="w-1.5 h-1.5 rounded-full ${isActive ? 'bg-emerald-500' : 'bg-rose-500'}"></span>
+                <span>${isActive ? 'نشط' : 'معطّل'}</span>
+              </button>
+            `}
 
             <!-- Change Password Button -->
             <button class="change-pwd-btn min-h-[44px] min-w-[44px] w-11 h-11 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 flex items-center justify-center text-slate-600 dark:text-slate-300 active:scale-95 transition"
@@ -1405,11 +1423,13 @@
               <i data-lucide="key" class="w-4 h-4"></i>
             </button>
 
-            <!-- Delete Button -->
-            <button class="delete-staff-btn min-h-[44px] min-w-[44px] w-11 h-11 rounded-xl bg-rose-50 dark:bg-rose-950/40 hover:bg-rose-100 dark:hover:bg-rose-900/60 flex items-center justify-center text-rose-500 active:scale-95 transition"
-              data-id="${escapeHtml(u.id)}" data-username="${escapeHtml(u.username)}" title="حذف الموظف">
-              <i data-lucide="trash-2" class="w-4 h-4"></i>
-            </button>
+            <!-- Delete Button (مخفي/معطّل للمدير المحمي وآخر Admin نشط) -->
+            ${lockProtectedUi ? '' : `
+              <button class="delete-staff-btn min-h-[44px] min-w-[44px] w-11 h-11 rounded-xl bg-rose-50 dark:bg-rose-950/40 hover:bg-rose-100 dark:hover:bg-rose-900/60 flex items-center justify-center text-rose-500 active:scale-95 transition"
+                data-id="${escapeHtml(u.id)}" data-username="${escapeHtml(u.username)}" title="حذف الموظف">
+                <i data-lucide="trash-2" class="w-4 h-4"></i>
+              </button>
+            `}
           </div>
         </div>
       `;

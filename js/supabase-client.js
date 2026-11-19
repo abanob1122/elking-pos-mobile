@@ -864,6 +864,37 @@
 
     async updateStaffUser(userId, { full_name, role, branch_id, password = null }) {
       if (!userId) throw new Error('معرف المستخدم مطلوب');
+      const sid = this._requireStoreId();
+      const session = this.getSession ? this.getSession() : null;
+      const actorUsername = (session && session.username) ? session.username : '';
+
+      let passwordHash = null;
+      if (password && password.trim()) {
+        const cryptoLib = (typeof window !== 'undefined' && window.CryptoUtils) || (typeof globalThis !== 'undefined' && globalThis.CryptoUtils) || (typeof CryptoUtils !== 'undefined' && CryptoUtils);
+        const hashResult = await cryptoLib.hashPassword(password.trim());
+        passwordHash = hashResult.combined;
+      }
+
+      if (actorUsername && !passwordHash) {
+        try {
+          return await this.request('/rpc/admin_update_staff_role', {
+            method: 'POST',
+            body: {
+              p_store_id: sid,
+              p_actor_username: actorUsername,
+              p_target_user_id: userId,
+              p_new_role: role !== undefined ? role : null,
+              p_full_name: full_name !== undefined ? full_name : null,
+              p_branch_id: branch_id !== undefined ? (branch_id || null) : null,
+              p_password_hash: null,
+            },
+          });
+        } catch (err) {
+          if (err && err.status !== 404 && !String(err.message || '').includes('PGRST202')) {
+            throw err;
+          }
+        }
+      }
 
       const payload = {
         updated_at: new Date().toISOString(),
@@ -872,14 +903,9 @@
       if (full_name !== undefined) payload.full_name = full_name;
       if (role !== undefined) payload.role = role;
       if (branch_id !== undefined) payload.branch_id = branch_id || null;
+      if (passwordHash) payload.password_hash = passwordHash;
 
-      if (password && password.trim()) {
-        const cryptoLib = (typeof window !== 'undefined' && window.CryptoUtils) || (typeof globalThis !== 'undefined' && globalThis.CryptoUtils) || (typeof CryptoUtils !== 'undefined' && CryptoUtils);
-        const hashResult = await cryptoLib.hashPassword(password.trim());
-        payload.password_hash = hashResult.combined;
-      }
-
-      return await this.request(`/staff_users?id=eq.${encodeURIComponent(userId)}&store_id=eq.${this._requireStoreId()}`, {
+      return await this.request(`/staff_users?id=eq.${encodeURIComponent(userId)}&store_id=eq.${sid}`, {
         method: 'PATCH',
         body: payload,
         headers: { 'Prefer': 'return=representation' },
@@ -888,7 +914,29 @@
 
     async toggleStaffStatus(userId, isActive) {
       if (!userId) throw new Error('معرف المستخدم مطلوب');
-      return await this.request(`/staff_users?id=eq.${encodeURIComponent(userId)}&store_id=eq.${this._requireStoreId()}`, {
+      const sid = this._requireStoreId();
+      const session = this.getSession ? this.getSession() : null;
+      const actorUsername = (session && session.username) ? session.username : '';
+
+      if (actorUsername) {
+        try {
+          return await this.request('/rpc/admin_toggle_staff_active', {
+            method: 'POST',
+            body: {
+              p_store_id: sid,
+              p_actor_username: actorUsername,
+              p_target_user_id: userId,
+              p_is_active: Boolean(isActive),
+            },
+          });
+        } catch (err) {
+          if (err && err.status !== 404 && !String(err.message || '').includes('PGRST202')) {
+            throw err;
+          }
+        }
+      }
+
+      return await this.request(`/staff_users?id=eq.${encodeURIComponent(userId)}&store_id=eq.${sid}`, {
         method: 'PATCH',
         body: {
           is_active: Boolean(isActive),
@@ -900,8 +948,29 @@
 
     async deleteStaffUser(userId) {
       if (!userId) throw new Error('معرف المستخدم مطلوب');
-      // حذف منطقي Soft Delete
-      return await this.request(`/staff_users?id=eq.${encodeURIComponent(userId)}&store_id=eq.${this._requireStoreId()}`, {
+      const sid = this._requireStoreId();
+      const session = this.getSession ? this.getSession() : null;
+      const actorUsername = (session && session.username) ? session.username : '';
+
+      if (actorUsername) {
+        try {
+          return await this.request('/rpc/admin_soft_delete_staff', {
+            method: 'POST',
+            body: {
+              p_store_id: sid,
+              p_actor_username: actorUsername,
+              p_target_user_id: userId,
+            },
+          });
+        } catch (err) {
+          if (err && err.status !== 404 && !String(err.message || '').includes('PGRST202')) {
+            throw err;
+          }
+        }
+      }
+
+      // التراجع الآمن للحذف المنطقي Soft Delete إذا لم تُفعَّل دوال RPC بعد
+      return await this.request(`/staff_users?id=eq.${encodeURIComponent(userId)}&store_id=eq.${sid}`, {
         method: 'PATCH',
         body: {
           is_deleted: true,

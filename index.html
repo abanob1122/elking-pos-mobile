@@ -792,7 +792,9 @@
     // تسجيل الـ Service Worker عند دعم المتصفح
     if ('serviceWorker' in navigator) {
       window.addEventListener('load', () => {
-        navigator.serviceWorker.register('./service-worker.js').catch(err => {
+        navigator.serviceWorker.register('./service-worker.js', { updateViaCache: 'none' }).then((reg) => {
+          reg.update().catch(() => {});
+        }).catch(err => {
           console.debug('ServiceWorker registration error:', err);
         });
       });
