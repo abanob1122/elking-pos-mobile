@@ -423,8 +423,13 @@
         method: options.method || 'GET',
         headers,
       };
-      if (options.body) {
-        fetchOptions.body = typeof options.body === 'string' ? options.body : JSON.stringify(options.body);
+      if (options.body !== undefined && options.body !== null) {
+        if (typeof options.body === 'string') {
+          const trimmed = options.body.trim();
+          fetchOptions.body = trimmed === '' ? '{}' : options.body;
+        } else {
+          fetchOptions.body = JSON.stringify(options.body);
+        }
       }
       const response = await fetch(url, fetchOptions);
       if (!response.ok) {
@@ -461,6 +466,15 @@
       if (!cleanId) return null;
       const rows = await this._publicAuthRequest(
         `/stores?id=eq.${encodeURIComponent(cleanId)}&select=id,name,store_code&limit=1`
+      );
+      return rows && rows.length > 0 ? rows[0] : null;
+    }
+
+    async resolveStoreByCode(storeCode) {
+      const cleanCode = String(storeCode || '').trim().toUpperCase();
+      if (!cleanCode) return null;
+      const rows = await this._publicAuthRequest(
+        `/stores?store_code=eq.${encodeURIComponent(cleanCode)}&select=id,name,store_code&limit=1`
       );
       return rows && rows.length > 0 ? rows[0] : null;
     }

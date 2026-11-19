@@ -398,6 +398,19 @@
               if (client) client.saveConfig({ storeCode: norm, storeName: st.name || decodedName });
             }
           }).catch(() => {});
+        } else if (cleanStoreCode && !cleanStoreId && client && typeof client.resolveStoreByCode === 'function') {
+          client.resolveStoreByCode(cleanStoreCode).then((st) => {
+            if (st && st.id) {
+              const sid = String(st.id).trim();
+              const sname = st.name || decodedName;
+              localStorage.setItem('elking_pwa_store_id', sid);
+              localStorage.setItem('elking_pwa_store_name', sname);
+              if (storeInp && !storeInp.value) storeInp.value = sid;
+              if (client) client.saveConfig({ storeId: sid, storeCode: cleanStoreCode, storeName: sname });
+              const nameEl = el('connectedStoreName');
+              if (nameEl) nameEl.textContent = `${sname} (${cleanStoreCode})`;
+            }
+          }).catch(() => {});
         }
 
         window.history.replaceState({}, document.title, window.location.pathname);
