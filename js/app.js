@@ -965,7 +965,11 @@
   // =========================================================================
   function _getSalesDateFilterRange() {
     const mode = el('salesDateFilter')?.value || 'ALL';
-    const cairoOffset = (days) => {
+    const branchTz = (client && client.branchTimezone) || 'Africa/Cairo';
+    const businessOffset = (days) => {
+      if (client && typeof client.getBusinessOffsetDateStr === 'function') {
+        return client.getBusinessOffsetDateStr(days, branchTz);
+      }
       if (client && typeof client.getCairoOffsetDateStr === 'function') {
         return client.getCairoOffsetDateStr(days);
       }
@@ -973,11 +977,11 @@
       return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
     };
     if (mode === 'today') {
-      const t = cairoOffset(0);
+      const t = businessOffset(0);
       return { dateFrom: t, dateTo: t };
     }
     if (mode === 'yesterday') {
-      const y = cairoOffset(-1);
+      const y = businessOffset(-1);
       return { dateFrom: y, dateTo: y };
     }
     if (mode === 'DAY') {
@@ -1736,15 +1740,18 @@
       const mode = el('salesDateFilter')?.value || 'ALL';
       const dayBox = el('salesDayContainer');
       const rangeBox = el('salesRangeContainer');
-      const todayCairo = (client && typeof client.getCairoDateStr === 'function')
-        ? client.getCairoDateStr(new Date())
-        : new Date().toISOString().slice(0, 10);
+      const branchTz = (client && client.branchTimezone) || 'Africa/Cairo';
+      const todayBiz = (client && typeof client.getBusinessDateStr === 'function')
+        ? client.getBusinessDateStr(new Date(), branchTz)
+        : ((client && typeof client.getCairoDateStr === 'function')
+          ? client.getCairoDateStr(new Date())
+          : new Date().toISOString().slice(0, 10));
 
       if (dayBox) {
         if (mode === 'DAY') {
           dayBox.classList.remove('hidden');
           const dInp = el('salesDateInput');
-          if (dInp && !dInp.value) dInp.value = todayCairo;
+          if (dInp && !dInp.value) dInp.value = todayBiz;
         } else {
           dayBox.classList.add('hidden');
         }
@@ -1754,8 +1761,8 @@
           rangeBox.classList.remove('hidden');
           const fInp = el('salesDateFrom');
           const tInp = el('salesDateTo');
-          if (fInp && !fInp.value) fInp.value = todayCairo;
-          if (tInp && !tInp.value) tInp.value = todayCairo;
+          if (fInp && !fInp.value) fInp.value = todayBiz;
+          if (tInp && !tInp.value) tInp.value = todayBiz;
         } else {
           rangeBox.classList.add('hidden');
         }
@@ -1856,6 +1863,11 @@
     }
 
     _realtimeUnsubscribe = client.subscribeRealtime((table, eventType, record) => {
+      const expectedStore = String((client.session && client.session.store_id) || '').trim().toLowerCase();
+      const recStore = String((record && (record.store_id || record.tenant_id)) || '').trim().toLowerCase();
+      if (recStore && expectedStore && recStore !== expectedStore) {
+        return;
+      }
       // تجميع الجداول المتغيرة مع Debounce 500ms ثم تحديث التبويب المفتوح حالياً فقط عند صلته بالتغيير
       _realtimePendingTables.add(table);
       clearTimeout(_realtimeDebounceTimer);
@@ -1908,8 +1920,11 @@
     try {
       const session = client.session;
       if (!session || !session.username) return;
+      const sid = (typeof client._requireStoreId === 'function')
+        ? client._requireStoreId()
+        : encodeURIComponent(String(session.store_id || client.config?.storeId || '').trim());
       const rows = await client.request(
-        `/staff_users?store_id=eq.${client.config.storeId}&username=eq.${encodeURIComponent(session.username)}&select=is_active,is_deleted`
+        `/staff_users?store_id=eq.${sid}&username=eq.${encodeURIComponent(session.username)}&select=is_active,is_deleted`
       );
       if (!rows || rows.length === 0) return;
       const u = rows[0];

@@ -79,10 +79,22 @@
    */
   const CAIRO_TZ = 'Africa/Cairo';
 
-  function _formatYmdInCairo(dateObj) {
+  function normalizeBranchTimeZone(tzName) {
+    const clean = String(tzName || '').trim();
+    if (!clean) return CAIRO_TZ;
+    try {
+      new Intl.DateTimeFormat('en-CA', { timeZone: clean });
+      return clean;
+    } catch (_) {
+      return CAIRO_TZ;
+    }
+  }
+
+  function _formatYmdInTimeZone(dateObj, timeZone = CAIRO_TZ) {
+    const tz = normalizeBranchTimeZone(timeZone);
     try {
       const parts = new Intl.DateTimeFormat('en-CA', {
-        timeZone: CAIRO_TZ,
+        timeZone: tz,
         year: 'numeric',
         month: '2-digit',
         day: '2-digit',
@@ -103,8 +115,12 @@
     return `${y}-${m}-${d}`;
   }
 
+  function getBusinessDateStr(dateObj = new Date(), timeZone = CAIRO_TZ) {
+    return _formatYmdInTimeZone(dateObj instanceof Date ? dateObj : new Date(dateObj), timeZone);
+  }
+
   function getCairoDateStr(dateObj = new Date()) {
-    return _formatYmdInCairo(dateObj instanceof Date ? dateObj : new Date(dateObj));
+    return getBusinessDateStr(dateObj, CAIRO_TZ);
   }
 
   function _addDaysToYmd(ymdStr, days) {
@@ -116,15 +132,20 @@
     return `${yy}-${mm}-${dd}`;
   }
 
-  function getCairoOffsetDateStr(daysOffset = 0) {
-    const todayCairo = getCairoDateStr(new Date());
-    return _addDaysToYmd(todayCairo, daysOffset);
+  function getBusinessOffsetDateStr(daysOffset = 0, timeZone = CAIRO_TZ) {
+    const todayLocal = getBusinessDateStr(new Date(), timeZone);
+    return _addDaysToYmd(todayLocal, daysOffset);
   }
 
-  function _getCairoOffsetMs(utcDate) {
+  function getCairoOffsetDateStr(daysOffset = 0) {
+    return getBusinessOffsetDateStr(daysOffset, CAIRO_TZ);
+  }
+
+  function _getTimeZoneOffsetMs(utcDate, timeZone = CAIRO_TZ) {
+    const tz = normalizeBranchTimeZone(timeZone);
     try {
       const parts = new Intl.DateTimeFormat('en-GB', {
-        timeZone: CAIRO_TZ,
+        timeZone: tz,
         year: 'numeric',
         month: '2-digit',
         day: '2-digit',
@@ -153,27 +174,37 @@
     }
   }
 
-  function cairoMidnightToUtcDate(ymdStr) {
+  function businessMidnightToUtcDate(ymdStr, timeZone = CAIRO_TZ) {
+    const tz = normalizeBranchTimeZone(timeZone);
     const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(ymdStr || '').trim());
     if (!match) {
       throw new Error(`صيغة التاريخ غير صالحة: ${ymdStr}`);
     }
     const nominalUtc = Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]), 0, 0, 0, 0);
-    const off1 = _getCairoOffsetMs(new Date(nominalUtc));
+    const off1 = _getTimeZoneOffsetMs(new Date(nominalUtc), tz);
     const cand1 = nominalUtc - off1;
-    const off2 = _getCairoOffsetMs(new Date(cand1));
+    const off2 = _getTimeZoneOffsetMs(new Date(cand1), tz);
     return new Date(nominalUtc - off2);
   }
 
-  function getCairoRangeUtc(dateFrom, dateTo) {
+  function cairoMidnightToUtcDate(ymdStr) {
+    return businessMidnightToUtcDate(ymdStr, CAIRO_TZ);
+  }
+
+  function getBusinessRangeUtc(dateFrom, dateTo, timeZone = CAIRO_TZ) {
+    const tz = normalizeBranchTimeZone(timeZone);
     const cleanFrom = dateFrom ? String(dateFrom).trim() : null;
     const cleanTo = dateTo ? String(dateTo).trim() : null;
     if (cleanFrom && cleanTo && cleanFrom > cleanTo) {
       throw new Error('تاريخ البداية يجب أن يكون قبل أو مساوياً لتاريخ النهاية');
     }
-    const startIso = cleanFrom ? cairoMidnightToUtcDate(cleanFrom).toISOString() : null;
-    const endExclusiveIso = cleanTo ? cairoMidnightToUtcDate(_addDaysToYmd(cleanTo, 1)).toISOString() : null;
-    return { startIso, endExclusiveIso };
+    const startIso = cleanFrom ? businessMidnightToUtcDate(cleanFrom, tz).toISOString() : null;
+    const endExclusiveIso = cleanTo ? businessMidnightToUtcDate(_addDaysToYmd(cleanTo, 1), tz).toISOString() : null;
+    return { startIso, endExclusiveIso, timeZone: tz };
+  }
+
+  function getCairoRangeUtc(dateFrom, dateTo) {
+    return getBusinessRangeUtc(dateFrom, dateTo, CAIRO_TZ);
   }
 
   /**
@@ -293,8 +324,34 @@
       this.config = this._loadConfig();
       this.session = this._loadSession();
       this.activeBranchId = storage.getItem(STORAGE_KEYS.ACTIVE_BRANCH) || 'ALL';
+      this.branchTimezone = normalizeBranchTimeZone(this.config.branchTimezone || CAIRO_TZ);
       this._branchesCache = null;
       this._activeRealtimeUnsubs = new Set();
+    }
+
+    setBranchTimezone(tzName) {
+      this.branchTimezone = normalizeBranchTimeZone(tzName);
+      return this.branchTimezone;
+    }
+
+    async _resolveBranchTimezone(branchId = 'ALL') {
+      try {
+        const branches = Array.isArray(this._branchesCache) && this._branchesCache.length > 0
+          ? this._branchesCache
+          : [];
+        if (branchId && branchId !== 'ALL') {
+          const found = branches.find(b => b && String(b.id) === String(branchId));
+          if (found && found.branch_timezone) {
+            return normalizeBranchTimeZone(found.branch_timezone);
+          }
+        } else if (branches.length > 0) {
+          const mainBr = branches.find(b => b && b.is_main && b.branch_timezone) || branches.find(b => b && b.branch_timezone);
+          if (mainBr && mainBr.branch_timezone) {
+            return normalizeBranchTimeZone(mainBr.branch_timezone);
+          }
+        }
+      } catch (_) {}
+      return normalizeBranchTimeZone(this.branchTimezone || CAIRO_TZ);
     }
 
     _loadConfig() {
@@ -632,6 +689,14 @@
       const query = `/branches?store_id=eq.${sid}&order=is_main.desc,name.asc`;
       const branches = (await this.request(query)) || [];
       this._branchesCache = branches;
+      try {
+        const active = this.activeBranchId && this.activeBranchId !== 'ALL'
+          ? branches.find(b => b && String(b.id) === String(this.activeBranchId))
+          : (branches.find(b => b && b.is_main) || branches[0]);
+        if (active && active.branch_timezone) {
+          this.branchTimezone = normalizeBranchTimeZone(active.branch_timezone);
+        }
+      } catch (_) {}
       return branches;
     }
 
@@ -660,6 +725,9 @@
       const sid = this._requireStoreId();
       const query = `/stores?id=eq.${sid}&limit=1`;
       const stores = await this.request(query);
+      if (stores && stores.length > 0 && stores[0].branch_timezone && (!this.branchTimezone || this.branchTimezone === CAIRO_TZ)) {
+        this.branchTimezone = normalizeBranchTimeZone(stores[0].branch_timezone);
+      }
       return stores && stores.length > 0 ? stores[0] : null;
     }
 
@@ -667,9 +735,10 @@
     // المؤشرات الرئيسية ولوحة المعلومات (Dashboard KPIs)
     // =========================================================================
     async getDashboardKPIs(branchId = 'ALL') {
-      // حساب بداية اليوم ونهايته صراحةً بتوقيت مصر (Africa/Cairo) ثم تحويلهما لنطاق نصف مفتوح [start, next_day_start) بـ UTC
-      const todayCairo = getCairoDateStr(new Date());
-      const { startIso, endExclusiveIso } = getCairoRangeUtc(todayCairo, todayCairo);
+      // حساب بداية اليوم ونهايته صراحةً بتوقيت الفرع المهيأ ثم تحويلهما لنطاق نصف مفتوح [start, next_day_start) بـ UTC
+      const tz = await this._resolveBranchTimezone(branchId);
+      const todayLocal = getBusinessDateStr(new Date(), tz);
+      const { startIso, endExclusiveIso } = getBusinessRangeUtc(todayLocal, todayLocal, tz);
 
       const sid = this._requireStoreId();
       const resolvedBranchClause = await this._resolveBranchFilter(branchId);
@@ -860,7 +929,8 @@
       const effectiveFrom = dateFrom || date || null;
       const effectiveTo = dateTo || date || null;
       if (effectiveFrom || effectiveTo) {
-        const { startIso, endExclusiveIso } = getCairoRangeUtc(effectiveFrom, effectiveTo);
+        const tz = await this._resolveBranchTimezone(branchId);
+        const { startIso, endExclusiveIso } = getBusinessRangeUtc(effectiveFrom, effectiveTo, tz);
         if (startIso) filters.push(`sale_date=gte.${startIso}`);
         if (endExclusiveIso) filters.push(`sale_date=lt.${endExclusiveIso}`);
       }
@@ -911,7 +981,7 @@
 
       if (branchId && branchId !== 'ALL') {
         // جميع الأصناف مرتبطة بفرع محدد (branch_id NOT NULL في المخطط)
-        filters.push(`branch_id=eq.${branchId}`);
+        filters.push(`branch_id=eq.${encodeURIComponent(branchId)}`);
       }
 
       if (search && search.trim()) {
@@ -936,14 +1006,67 @@
 
     async updateProduct(productId, updates) {
       if (!productId) throw new Error('معرف الصنف مطلوب');
+      const {
+        stock_quantity: _sq1,
+        stock_qty: _sq2,
+        store_id: _stId,
+        branch_id: _brId,
+        id: _id,
+        ...safeUpdates
+      } = (updates || {});
       const payload = {
-        ...updates,
+        ...safeUpdates,
         updated_at: new Date().toISOString(),
       };
-      return await this.request(`/products?id=eq.${encodeURIComponent(productId)}&store_id=eq.${this._requireStoreId()}`, {
+      const branchScope = (this.activeBranchId && this.activeBranchId !== 'ALL')
+        ? `&branch_id=eq.${encodeURIComponent(this.activeBranchId)}`
+        : '';
+      return await this.request(`/products?id=eq.${encodeURIComponent(productId)}&store_id=eq.${this._requireStoreId()}${branchScope}`, {
         method: 'PATCH',
         body: payload,
         headers: { 'Prefer': 'return=representation' },
+      });
+    }
+
+    async adjustProductStockDelta({
+      operationId = null,
+      branchId = null,
+      barcode = '',
+      productId = null,
+      deltaQty = 0,
+      movementType = 'mobile_adjustment',
+      reason = '',
+      referenceId = '',
+    } = {}) {
+      const sid = decodeURIComponent(this._requireStoreId());
+      const bid = (branchId && branchId !== 'ALL')
+        ? branchId
+        : (this.activeBranchId && this.activeBranchId !== 'ALL' ? this.activeBranchId : '');
+      if (!bid) throw new Error('يرجى تحديد الفرع لإجراء تعديل المخزون');
+      const qtyNum = Number(deltaQty);
+      if (!Number.isFinite(qtyNum) || Math.abs(qtyNum) < 1e-9) {
+        throw new Error('قيمة فرق الكمية غير صالحة');
+      }
+      const opId = operationId || (typeof crypto !== 'undefined' && crypto.randomUUID
+        ? crypto.randomUUID()
+        : `00000000-0000-4000-8000-${Date.now().toString(16).padStart(12, '0')}`);
+      const tz = await this._resolveBranchTimezone(bid);
+      return await this.request('/rpc/apply_inventory_delta', {
+        method: 'POST',
+        body: {
+          p_operation_id: opId,
+          p_store_id: sid,
+          p_branch_id: String(bid),
+          p_barcode_ean13: String(barcode || '').trim(),
+          p_delta_qty: qtyNum,
+          p_movement_type: String(movementType || 'mobile_adjustment'),
+          p_reason: String(reason || ''),
+          p_reference_id: String(referenceId || ''),
+          p_terminal_id: 'mobile_pwa',
+          p_branch_timezone: tz,
+          p_occurred_at: new Date().toISOString(),
+          p_product_id: productId || null,
+        },
       });
     }
 
@@ -1216,10 +1339,22 @@
         }
 
         ws.onopen = () => {
+          if (_stopped || !ws) {
+            try { ws && ws.close(); } catch (_) {}
+            return;
+          }
+          if (heartbeatTimer) {
+            clearInterval(heartbeatTimer);
+            heartbeatTimer = null;
+          }
           // بث نبضة القلب كل 30 ثانية
           heartbeatTimer = setInterval(() => {
+            if (_stopped) return;
             _send({ topic: 'phoenix', event: 'heartbeat', payload: {}, ref: String(_ref++) });
           }, 30000);
+          if (heartbeatTimer && typeof heartbeatTimer.unref === 'function') {
+            heartbeatTimer.unref();
+          }
           // الاشتراك على جميع الجداول
           TABLES.forEach(_subscribe);
         };
@@ -1229,8 +1364,14 @@
             const msg = JSON.parse(evt.data);
             if (msg.event === 'postgres_changes' && msg.payload && msg.payload.data) {
               const { table, type, record, old_record } = msg.payload.data;
+              const rec = record || old_record;
+              const expectedStore = String((this.session && this.session.store_id) || (this.config && this.config.storeId) || '').trim().toLowerCase();
+              const recStore = String((rec && (rec.store_id || rec.tenant_id)) || '').trim().toLowerCase();
+              if (recStore && expectedStore && recStore !== expectedStore) {
+                return;
+              }
               if (table && onChangeCallback) {
-                onChangeCallback(table, type, record || old_record, old_record);
+                onChangeCallback(table, type, rec, old_record);
               }
             }
           } catch (_) {}
@@ -1253,8 +1394,14 @@
       // دالة إلغاء الاشتراك وتسجيلها في قائمة القنوات النشطة
       const unsubscribe = () => {
         _stopped = true;
-        clearInterval(heartbeatTimer);
-        clearTimeout(reconnectTimer);
+        if (heartbeatTimer) {
+          clearInterval(heartbeatTimer);
+          heartbeatTimer = null;
+        }
+        if (reconnectTimer) {
+          clearTimeout(reconnectTimer);
+          reconnectTimer = null;
+        }
         if (ws) {
           try { ws.close(); } catch (_) {}
           ws = null;
@@ -1281,6 +1428,10 @@
   clientInstance.getCairoDateStr = getCairoDateStr;
   clientInstance.getCairoOffsetDateStr = getCairoOffsetDateStr;
   clientInstance.getCairoRangeUtc = getCairoRangeUtc;
+  clientInstance.normalizeBranchTimeZone = normalizeBranchTimeZone;
+  clientInstance.getBusinessDateStr = getBusinessDateStr;
+  clientInstance.getBusinessOffsetDateStr = getBusinessOffsetDateStr;
+  clientInstance.getBusinessRangeUtc = getBusinessRangeUtc;
 
   if (typeof window !== 'undefined') {
     window.SupabaseClient = clientInstance;
@@ -1293,6 +1444,10 @@
     window.getCairoDateStr = getCairoDateStr;
     window.getCairoOffsetDateStr = getCairoOffsetDateStr;
     window.getCairoRangeUtc = getCairoRangeUtc;
+    window.normalizeBranchTimeZone = normalizeBranchTimeZone;
+    window.getBusinessDateStr = getBusinessDateStr;
+    window.getBusinessOffsetDateStr = getBusinessOffsetDateStr;
+    window.getBusinessRangeUtc = getBusinessRangeUtc;
   }
   if (typeof module !== 'undefined' && module.exports) {
     module.exports = clientInstance;
@@ -1306,5 +1461,10 @@
     module.exports.getCairoDateStr = getCairoDateStr;
     module.exports.getCairoOffsetDateStr = getCairoOffsetDateStr;
     module.exports.getCairoRangeUtc = getCairoRangeUtc;
+    module.exports.normalizeBranchTimeZone = normalizeBranchTimeZone;
+    module.exports.getBusinessDateStr = getBusinessDateStr;
+    module.exports.getBusinessOffsetDateStr = getBusinessOffsetDateStr;
+    module.exports.businessMidnightToUtcDate = businessMidnightToUtcDate;
+    module.exports.getBusinessRangeUtc = getBusinessRangeUtc;
   }
 })(typeof window !== 'undefined' ? window : globalThis);
