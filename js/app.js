@@ -24,13 +24,34 @@
     selectedBranchId: 'ALL',
   };
   let isRefreshing = false;
-  let deferredPrompt = null;
+  let deferredInstallPrompt = (typeof window !== 'undefined' && window.__elkingDeferredInstallPrompt)
+    ? window.__elkingDeferredInstallPrompt
+    : null;
   let lastSuccessfulSyncTime = null;
   let salesCurrentPage = 0;
   const SALES_PAGE_SIZE = 30;
   let lastVisibilityRefreshAt = 0;
   let pendingStoreResolutionCode = '';
   let pendingStoreResolutionPromise = null;
+  const PWA_INSTALL_DISMISS_KEY = 'elking_pwa_dismiss_install';
+
+  if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+    window.addEventListener('beforeinstallprompt', (e) => {
+      if (e && typeof e.preventDefault === 'function') e.preventDefault();
+      deferredInstallPrompt = e;
+      window.__elkingDeferredInstallPrompt = e;
+      try { refreshInstallPromptVisibility(); } catch (_) {}
+    });
+
+    window.addEventListener('appinstalled', () => {
+      deferredInstallPrompt = null;
+      window.__elkingDeferredInstallPrompt = null;
+      try {
+        hideAllInstallUI();
+        showToast('تم تثبيت التطبيق بنجاح على الشاشة الرئيسية');
+      } catch (_) {}
+    });
+  }
   try {
     lastSuccessfulSyncTime = localStorage.getItem('elking_pwa_last_sync') || null;
   } catch (_) {}
@@ -472,6 +493,10 @@
           }).catch(() => null);
         }
 
+        // مسح حالة التجاهل المؤقت عند كل مسح QR جديد لإظهار بطاقة التثبيت فوراً
+        setInstallPromptDismissedForSession(false);
+        refreshInstallPromptVisibility();
+
         window.history.replaceState({}, document.title, window.location.pathname);
         showToast(`تم ربط المتجر بنجاح: ${decodedName}`);
       }
@@ -535,6 +560,7 @@
       headerStoreName.textContent = savedStoreName;
     }
 
+    refreshInstallPromptVisibility();
     triggerIcons();
 
     setTimeout(() => {
@@ -761,74 +787,190 @@
   // PWA Installation & Add-to-Home-Screen (Android / iOS / Desktop Chrome)
   // =========================================================================
   function isIos() {
-    const ua = window.navigator.userAgent.toLowerCase();
-    return /iphone|ipad|ipod/.test(ua);
+    const ua = (typeof navigator !== 'undefined' && navigator.userAgent)
+      ? String(navigator.userAgent).toLowerCase()
+      : '';
+    const isClassicIos = /iphone|ipad|ipod/.test(ua);
+    const isIpadOs = (typeof navigator !== 'undefined' && navigator.platform === 'MacIntel' && Number(navigator.maxTouchPoints || 0) > 1);
+    return isClassicIos || isIpadOs;
   }
 
-  function isStandalone() {
-    return window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
+  function isRunningStandalone() {
+    const displayStandalone = (typeof window !== 'undefined' && typeof window.matchMedia === 'function')
+      ? Boolean(window.matchMedia('(display-mode: standalone)').matches)
+      : false;
+    const iosStandalone = (typeof navigator !== 'undefined' && navigator.standalone === true)
+      || (typeof window !== 'undefined' && window.navigator && window.navigator.standalone === true);
+    return displayStandalone || iosStandalone;
   }
 
-  function setupPwaInstall() {
-    // إذا كان التطبيق مثبتاً بالفعل ويعمل بوضع standalone، لا نعرض البنرات
-    if (isStandalone()) {
+  function isInstallPromptDismissedForSession() {
+    try {
+      return sessionStorage.getItem(PWA_INSTALL_DISMISS_KEY) === 'true'
+        || sessionStorage.getItem('elking_pwa_dismiss_banner') === 'true';
+    } catch (_) {
+      return false;
+    }
+  }
+
+  function setInstallPromptDismissedForSession(dismissed) {
+    try {
+      if (dismissed) {
+        sessionStorage.setItem(PWA_INSTALL_DISMISS_KEY, 'true');
+        sessionStorage.setItem('elking_pwa_dismiss_banner', 'true');
+      } else {
+        sessionStorage.removeItem(PWA_INSTALL_DISMISS_KEY);
+        sessionStorage.removeItem('elking_pwa_dismiss_banner');
+      }
+    } catch (_) {}
+  }
+
+  function hideAllInstallUI() {
+    el('pwaInstallBanner')?.classList.add('hidden');
+    el('loginInstallPrompt')?.classList.add('hidden');
+    el('iosInstallModal')?.classList.add('hidden');
+    el('androidInstallHelpModal')?.classList.add('hidden');
+  }
+
+  function refreshInstallPromptVisibility() {
+    if (isRunningStandalone()) {
+      hideAllInstallUI();
+      return;
+    }
+    if (isInstallPromptDismissedForSession()) {
+      el('pwaInstallBanner')?.classList.add('hidden');
+      el('loginInstallPrompt')?.classList.add('hidden');
+      return;
+    }
+    el('pwaInstallBanner')?.classList.remove('hidden');
+    el('loginInstallPrompt')?.classList.remove('hidden');
+    triggerIcons();
+  }
+
+  function dismissInstallPrompt() {
+    setInstallPromptDismissedForSession(true);
+    el('pwaInstallBanner')?.classList.add('hidden');
+    el('loginInstallPrompt')?.classList.add('hidden');
+  }
+
+  function getStoreOnboardingUrl() {
+    const origin = (window.location && window.location.origin && window.location.origin !== 'null')
+      ? window.location.origin
+      : '';
+    const pathname = (window.location && window.location.pathname) ? window.location.pathname : './';
+    const base = origin ? `${origin}${pathname}` : pathname;
+    const params = new URLSearchParams();
+
+    const storeCode = normalizeLoginDigits(
+      el('loginStoreCode')?.value
+      || localStorage.getItem('elking_pwa_last_store_code')
+      || (client && client.config && client.config.storeCode)
+      || (client && client.session && client.session.store_code)
+      || ''
+    ).trim().toUpperCase();
+    const storeId = String(
+      el('loginStoreId')?.value
+      || localStorage.getItem('elking_pwa_store_id')
+      || (client && client.config && client.config.storeId)
+      || (client && client.session && client.session.store_id)
+      || ''
+    ).trim();
+    const storeName = String(
+      localStorage.getItem('elking_pwa_store_name')
+      || (client && client.config && client.config.storeName)
+      || ''
+    ).trim();
+
+    if (storeCode) {
+      params.set('store_code', storeCode);
+    } else if (storeId) {
+      params.set('store_id', storeId);
+    }
+    if (storeName && storeName !== 'متجر إلكينج' && storeName !== 'إلكينج POS') {
+      params.set('store_name', storeName);
+    }
+    const qs = params.toString();
+    return qs ? `${base}?${qs}` : base;
+  }
+
+  async function copyTextToClipboard(text) {
+    if (typeof navigator !== 'undefined' && navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+      try {
+        await navigator.clipboard.writeText(text);
+        return true;
+      } catch (_) {}
+    }
+    try {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.setAttribute('readonly', '');
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      const ok = document.execCommand('copy');
+      document.body.removeChild(ta);
+      return Boolean(ok);
+    } catch (_) {
+      return false;
+    }
+  }
+
+  async function triggerInstallFlow() {
+    if (isRunningStandalone()) {
+      hideAllInstallUI();
       return;
     }
 
-    // 1. حدث beforeinstallprompt لأجهزة Chrome و Edge و Android
-    window.addEventListener('beforeinstallprompt', (e) => {
-      e.preventDefault();
-      deferredPrompt = e;
+    const activePrompt = deferredInstallPrompt
+      || (typeof window !== 'undefined' ? window.__elkingDeferredInstallPrompt : null);
 
-      // إظهار بنر التثبيت العلوي إذا لم يقم المستخدم بإغلاقه مؤقتاً
-      const banner = el('pwaInstallBanner');
-      const loginPrompt = el('loginInstallPrompt');
-      if (banner && sessionStorage.getItem('elking_pwa_dismiss_banner') !== 'true') {
-        banner.classList.remove('hidden');
-      }
-      if (loginPrompt) {
-        loginPrompt.classList.remove('hidden');
-      }
-      triggerIcons();
-    });
-
-    // 2. معالجة هواتف آيفون (iOS Safari لا يطلق حدث beforeinstallprompt)
-    if (isIos() && !isStandalone()) {
-      const banner = el('pwaInstallBanner');
-      const loginPrompt = el('loginInstallPrompt');
-      if (banner && sessionStorage.getItem('elking_pwa_dismiss_banner') !== 'true') {
-        banner.classList.remove('hidden');
-      }
-      if (loginPrompt) {
-        loginPrompt.classList.remove('hidden');
-      }
-      triggerIcons();
-    }
-
-    // زر إغلاق البنر العلوي (تجاهل للجلسة الحالية)
-    el('pwaDismissBannerBtn')?.addEventListener('click', () => {
-      el('pwaInstallBanner')?.classList.add('hidden');
-      sessionStorage.setItem('elking_pwa_dismiss_banner', 'true');
-    });
-
-    // زر التثبيت المباشر (في البنر أو شاشة الدخول)
-    async function triggerInstallFlow() {
-      if (deferredPrompt) {
-        deferredPrompt.prompt();
-        const { outcome } = await deferredPrompt.userChoice;
-        if (outcome === 'accepted') {
-          showToast('جاري تثبيت تطبيق ELKing POS...');
+    if (activePrompt) {
+      deferredInstallPrompt = null;
+      if (typeof window !== 'undefined') window.__elkingDeferredInstallPrompt = null;
+      try {
+        await activePrompt.prompt();
+        const choice = await activePrompt.userChoice;
+        if (choice && choice.outcome === 'accepted') {
+          hideAllInstallUI();
+          showToast('تم تثبيت التطبيق بنجاح على الشاشة الرئيسية');
         }
-        deferredPrompt = null;
-        el('pwaInstallBanner')?.classList.add('hidden');
-        el('loginInstallPrompt')?.classList.add('hidden');
-      } else if (isIos()) {
-        el('iosInstallModal')?.classList.remove('hidden');
+      } catch (_) {
+        if (isIos()) {
+          el('iosInstallModal')?.classList.remove('hidden');
+        } else {
+          el('androidInstallHelpModal')?.classList.remove('hidden');
+        }
         triggerIcons();
-      } else {
-        showToast('لتثبيت التطبيق: افتح قائمة خيارات المتصفح (⋮) ثم اضغط "إضافة إلى الشاشة الرئيسية"');
       }
+      return;
     }
+
+    if (isIos()) {
+      el('iosInstallModal')?.classList.remove('hidden');
+      triggerIcons();
+      return;
+    }
+
+    el('androidInstallHelpModal')?.classList.remove('hidden');
+    triggerIcons();
+  }
+
+  function setupPwaInstall() {
+    if (!deferredInstallPrompt && typeof window !== 'undefined' && window.__elkingDeferredInstallPrompt) {
+      deferredInstallPrompt = window.__elkingDeferredInstallPrompt;
+    }
+
+    // إذا كان التطبيق مثبتاً بالفعل ويعمل بوضع standalone، لا نعرض أي بنر أو بطاقة تثبيت
+    if (isRunningStandalone()) {
+      hideAllInstallUI();
+      return;
+    }
+
+    refreshInstallPromptVisibility();
+
+    el('pwaDismissBannerBtn')?.addEventListener('click', dismissInstallPrompt);
+    el('loginDismissInstallBtn')?.addEventListener('click', dismissInstallPrompt);
 
     el('pwaInstallBtn')?.addEventListener('click', triggerInstallFlow);
     el('loginInstallBtn')?.addEventListener('click', triggerInstallFlow);
@@ -841,12 +983,21 @@
       el('iosInstallModal')?.classList.add('hidden');
     });
 
-    // الاستماع لحدث اكتمال التثبيت
-    window.addEventListener('appinstalled', () => {
-      showToast('تم تثبيت تطبيق الكاشير بنجاح على هاتفك! 🎉');
-      deferredPrompt = null;
-      el('pwaInstallBanner')?.classList.add('hidden');
-      el('loginInstallPrompt')?.classList.add('hidden');
+    // أزرار نافذة إرشادات متصفح الكاميرا / أندرويد البديلة
+    el('closeAndroidInstallHelpBtn')?.addEventListener('click', () => {
+      el('androidInstallHelpModal')?.classList.add('hidden');
+    });
+    el('okAndroidInstallHelpBtn')?.addEventListener('click', () => {
+      el('androidInstallHelpModal')?.classList.add('hidden');
+    });
+    el('copyStoreInstallUrlBtn')?.addEventListener('click', async () => {
+      const storeUrl = getStoreOnboardingUrl();
+      const copied = await copyTextToClipboard(storeUrl);
+      if (copied) {
+        showToast('تم نسخ رابط المتجر — افتحه في Chrome لتثبيت التطبيق');
+      } else {
+        showToast('تعذر النسخ التلقائي — انسخ الرابط من شريط المتصفح', true);
+      }
     });
   }
 
@@ -2074,15 +2225,15 @@
       return;
     }
 
-    // 2. Init in correct order: theme → URL params → events → auth check
+    // 2. Init in correct order: theme → PWA install → URL params → events → auth check
     try { initTheme(); } catch (e) { console.debug('initTheme error:', e); }
+    try { setupPwaInstall(); } catch (e) { console.debug('setupPwaInstall error:', e); }
     try { handleUrlOnboarding(); } catch (e) { console.debug('handleUrlOnboarding error:', e); }
     try { setupAuthEvents(); } catch (e) { console.debug('setupAuthEvents error:', e); }
     try { setupNavigation(); } catch (e) { console.debug('setupNavigation error:', e); }
     try { setupModalsAndForms(); } catch (e) { console.debug('setupModalsAndForms error:', e); }
     try { setupVirtualKeyboardScroll(); } catch (e) { console.debug('setupVirtualKeyboardScroll error:', e); }
     try { setupVisibilityAutoRefresh(); } catch (e) { console.debug('setupVisibilityAutoRefresh error:', e); }
-    try { setupPwaInstall(); } catch (e) { console.debug('setupPwaInstall error:', e); }
     try { triggerIcons(); } catch (e) { console.debug('triggerIcons error:', e); }
     try { checkAuth(); } catch (e) { console.debug('checkAuth error:', e); }
   });

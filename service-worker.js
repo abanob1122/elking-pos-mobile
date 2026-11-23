@@ -1,18 +1,18 @@
 /**
- * ELKing POS - Mobile PWA Service Worker (v3)
+ * ELKing POS - Mobile PWA Service Worker (v4)
  * يدعم التثبيت المباشر والعمل دون اتصال لشيل التطبيق (Offline App Shell)
  * متوافق 100% مع مسارات GitHub Pages والمجلدات الفرعية
  */
 
-const CACHE_NAME = 'elking-pos-v13-3-0';
+const CACHE_NAME = 'elking-pos-v13-3-1';
 const APP_SHELL_ASSETS = [
   './',
   './index.html',
   './manifest.json',
-  './css/app.css',
-  './js/crypto-utils.js',
-  './js/supabase-client.js',
-  './js/app.js',
+  './css/app.css?v=13.3.1',
+  './js/crypto-utils.js?v=13.3.1',
+  './js/supabase-client.js?v=13.3.1',
+  './js/app.js?v=13.3.1',
   './icons/icon-192.png',
   './icons/icon-512.png',
 ];
@@ -79,7 +79,23 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // 3. أصول التطبيق المحلية (App Shell) -> Cache First مع Fallback للشبكة
+  // 3. طلبات التنقل لصفحة التطبيق (HTML Navigate) -> Network-First لتجنب تقديم نسخة قديمة عند مسح QR
+  if (event.request.mode === 'navigate') {
+    event.respondWith(
+      fetch(event.request).then((networkResponse) => {
+        if (networkResponse && networkResponse.status === 200) {
+          const responseClone = networkResponse.clone();
+          caches.open(CACHE_NAME).then((cache) => cache.put('./index.html', responseClone));
+        }
+        return networkResponse;
+      }).catch(() => {
+        return caches.match('./index.html') || caches.match('./');
+      })
+    );
+    return;
+  }
+
+  // 4. أصول التطبيق المحلية (App Shell) -> Cache First مع Fallback للشبكة
   event.respondWith(
     caches.match(event.request).then((response) => {
       if (response) {

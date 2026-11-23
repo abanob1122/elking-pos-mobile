@@ -1,7 +1,7 @@
 /**
  * ELKing POS - Mobile PWA Crypto Utilities
  * متوافق 100% مع خوارزمية تشفير البرنامج المكتبي:
- * PBKDF2-HMAC-SHA256 مع 200,000 دورة وتوليد ملح عشوائي 16 بايت (32 hex chars).
+ * PBKDF2-HMAC-SHA256 مع 600,000 دورة (ودعم توافق رجعي لـ 200,000 و 100,000 دورة) وتوليد ملح عشوائي 16 بايت (32 hex chars).
  * نسق الحفظ السحابي والمحلي: ${digest}:${salt}
  */
 
@@ -9,6 +9,9 @@
   'use strict';
 
   const enc = new TextEncoder();
+  const PBKDF2_ROUNDS_CURRENT = 600000;
+  const PBKDF2_ROUNDS_LEGACY = [200000, 100000];
+  const PBKDF2_ROUNDS_CHECK_ORDER = [PBKDF2_ROUNDS_CURRENT, ...PBKDF2_ROUNDS_LEGACY];
 
   /**
    * توليد ملح عشوائي مشفر بعدد بايتات محدد (افتراضياً 16 بايت = 32 رمز hex)
@@ -65,7 +68,7 @@
    * اشتقاق تجزئة PBKDF2-SHA256
    * يقبل الملح كـ نص (UTF-8 bytes) أو كـ مصفوفة بايتات Uint8Array مباشرة
    */
-  async function derivePBKDF2(password, salt, iterations = 200000) {
+  async function derivePBKDF2(password, salt, iterations = PBKDF2_ROUNDS_CURRENT) {
     const keyMaterial = await crypto.subtle.importKey(
       'raw',
       enc.encode(password),
@@ -101,7 +104,7 @@
   }
 
   /**
-   * تشفير كلمة المرور بـ PBKDF2-SHA256 مع 200,000 دورة
+   * تشفير كلمة المرور بـ PBKDF2-SHA256 مع 600,000 دورة (مطابق للبرنامج المكتبي)
    * يعيد: { hash, salt, combined: `${hash}:${salt}` }
    */
   async function hashPassword(password, saltHex = null) {
@@ -109,7 +112,7 @@
       throw new Error('كلمة المرور مطلوبة للتشفير');
     }
     const salt = saltHex || generateSaltHex(16);
-    const hash = await derivePBKDF2(password, salt, 200000);
+    const hash = await derivePBKDF2(password, salt, PBKDF2_ROUNDS_CURRENT);
     return {
       hash: hash,
       salt: salt,
@@ -128,35 +131,29 @@
 
     // فحص إذا كان النسق مدمجاً ${hash}:${salt}
     if (!targetSalt && targetHash.includes(':')) {
-      const parts = targetHash.split(':');
-      targetHash = parts[0];
-      targetSalt = parts[1] || '';
+      const colonIdx = targetHash.indexOf(':');
+      targetSalt = targetHash.slice(colonIdx + 1);
+      targetHash = targetHash.slice(0, colonIdx);
     }
 
     if (targetSalt) {
-      // 1. فحص PBKDF2 مع 200,000 دورة مع Salt كـ UTF-8 bytes (المطابق المعتمد لـ Python salt.encode('utf-8'))
-      const candidate200kUtf8 = await derivePBKDF2(plainPassword, enc.encode(targetSalt), 200000);
-      if (timingSafeEqual(candidate200kUtf8, targetHash)) {
-        return true;
-      }
-
-      // 2. فحص PBKDF2 مع 100,000 دورة مع Salt كـ UTF-8 bytes (V6/V7 توافق رجعي)
-      const candidate100kUtf8 = await derivePBKDF2(plainPassword, enc.encode(targetSalt), 100000);
-      if (timingSafeEqual(candidate100kUtf8, targetHash)) {
-        return true;
-      }
-
-      // 3. فحص PBKDF2 إذا كان Salt مشفراً كـ Hex Bytes خام (bytes.fromhex(targetSalt))
-      const rawHexBytes = hexToBytes(targetSalt);
-      if (rawHexBytes) {
-        const candidate200kHex = await derivePBKDF2(plainPassword, rawHexBytes, 200000);
-        if (timingSafeEqual(candidate200kHex, targetHash)) {
+      // 1. فحص PBKDF2 مع Salt كـ UTF-8 bytes (600k أولاً ثم 200k ثم 100k — مطابق لـ Python salt.encode('utf-8'))
+      const utf8SaltBytes = enc.encode(targetSalt);
+      for (const rounds of PBKDF2_ROUNDS_CHECK_ORDER) {
+        const candidateUtf8 = await derivePBKDF2(plainPassword, utf8SaltBytes, rounds);
+        if (timingSafeEqual(candidateUtf8, targetHash)) {
           return true;
         }
+      }
 
-        const candidate100kHex = await derivePBKDF2(plainPassword, rawHexBytes, 100000);
-        if (timingSafeEqual(candidate100kHex, targetHash)) {
-          return true;
+      // 2. فحص PBKDF2 إذا كان Salt مشفراً كـ Hex Bytes خام (bytes.fromhex(targetSalt))
+      const rawHexBytes = hexToBytes(targetSalt);
+      if (rawHexBytes) {
+        for (const rounds of PBKDF2_ROUNDS_CHECK_ORDER) {
+          const candidateHex = await derivePBKDF2(plainPassword, rawHexBytes, rounds);
+          if (timingSafeEqual(candidateHex, targetHash)) {
+            return true;
+          }
         }
       }
 
@@ -173,6 +170,7 @@
   }
 
   const CryptoUtils = {
+    PBKDF2_ROUNDS_CURRENT,
     generateSaltHex,
     hexToBytes,
     hashPassword,

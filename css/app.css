@@ -163,3 +163,41 @@ html:not(.dark) #themeIconSun {
   direction: ltr;
   display: inline-block;
 }
+
+/* 60fps Install Prompt Card & Primary CTA Animations (transform / opacity only) */
+@keyframes installPromptSlideIn {
+  from {
+    opacity: 0;
+    transform: translateY(-8px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.install-prompt-card {
+  animation: installPromptSlideIn 0.28s cubic-bezier(0.16, 1, 0.3, 1) both;
+  will-change: transform, opacity;
+}
+
+@keyframes installCtaPulse {
+  0%, 100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(1.02);
+    opacity: 0.94;
+  }
+}
+
+.install-cta-btn {
+  animation: installCtaPulse 2.4s ease-in-out infinite;
+  will-change: transform, opacity;
+  transition: transform 0.15s ease, opacity 0.15s ease;
+}
+
+.install-cta-btn:active {
+  transform: scale(0.96);
+}
