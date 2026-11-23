@@ -15,6 +15,16 @@
   };
 
   /**
+   * تحويل الأرقام العربية والهندية/الفارسية (٠-٩، ۰-۹) إلى أرقام لاتينية (0-9)
+   */
+  function normalizeDigits(val) {
+    if (val === null || val === undefined) return '';
+    return String(val)
+      .replace(/[\u0660-\u0669]/g, ch => String(ch.charCodeAt(0) - 0x0660))
+      .replace(/[\u06F0-\u06F9]/g, ch => String(ch.charCodeAt(0) - 0x06F0));
+  }
+
+  /**
    * قراءة المبلغ الفعلي للفاتورة بترتيب الأولوية الصحيح وحماية تلقائية من القيم الصفرية
    * الأولوية: net_total -> total_amount / total -> (subtotal - discount + tax) -> subtotal -> paid_amount -> 0
    */
@@ -528,7 +538,7 @@
     }
 
     async resolveStoreByCode(storeCode) {
-      const cleanCode = String(storeCode || '').trim().toUpperCase();
+      const cleanCode = normalizeDigits(storeCode || '').trim().toUpperCase();
       if (!cleanCode) return null;
       const rows = await this._publicAuthRequest(
         `/stores?store_code=eq.${encodeURIComponent(cleanCode)}&select=id,name,store_code&limit=1`
@@ -536,20 +546,43 @@
       return rows && rows.length > 0 ? rows[0] : null;
     }
 
+    async _findStoreStaffFallback(storeId, cleanUser) {
+      const sidEnc = encodeURIComponent(storeId);
+      const userEnc = encodeURIComponent(cleanUser);
+      const query = `/staff_users?store_id=eq.${sidEnc}&username=ilike.${userEnc}&is_deleted=eq.false&limit=20`;
+      const rows = await this._publicAuthRequest(query);
+      const targetLower = cleanUser.toLowerCase();
+      return Array.isArray(rows)
+        ? rows.filter(u => u && String(u.username || '').trim().toLowerCase() === targetLower)
+        : [];
+    }
+
+    async _hasAnySyncedStaffForStore(storeId) {
+      const sidEnc = encodeURIComponent(storeId);
+      const rows = await this._publicAuthRequest(
+        `/staff_users?store_id=eq.${sidEnc}&is_deleted=eq.false&select=id&limit=1`
+      );
+      return Array.isArray(rows) && rows.length > 0;
+    }
+
     async login(username, password, { storeCode = '', storeId = '' } = {}) {
-      const cleanUser = (username || '').trim();
-      const cleanCode = String(storeCode || '').trim().toUpperCase();
-      const cleanStoreId = String(storeId || (this.config && this.config.storeId) || '').trim();
+      const cleanUser = normalizeDigits(username || '').trim();
+      const cleanCode = normalizeDigits(storeCode || '').trim().toUpperCase();
+      const explicitStoreId = String(storeId || '').trim();
+      const cleanStoreId = explicitStoreId || (!cleanCode && this.config && this.config.storeId ? String(this.config.storeId).trim() : '');
+      const rawPassword = String(password || '');
+      const isNumericOnlyPwd = /^[\u0660-\u0669\u06F0-\u06F90-9]+$/.test(rawPassword);
+      const effectivePassword = isNumericOnlyPwd ? normalizeDigits(rawPassword) : rawPassword;
 
       if (!cleanCode && !cleanStoreId) {
         throw new Error('يرجى إدخال كود المتجر (Store Code) أولاً');
       }
-      if (!cleanUser || !password) {
+      if (!cleanUser || !rawPassword) {
         throw new Error('يرجى إدخال اسم المستخدم وكلمة المرور');
       }
 
       let users = null;
-      let resolvedStoreId = cleanStoreId;
+      let resolvedStoreId = explicitStoreId || (!cleanCode ? cleanStoreId : '');
       let resolvedStoreName = (this.config && this.config.storeName) || 'متجر إلكينج';
       let resolvedStoreCode = cleanCode;
 
@@ -581,14 +614,20 @@
             `/stores?store_code=eq.${encodeURIComponent(cleanCode)}&select=id,name,store_code&limit=1`
           );
           if (!stores || stores.length === 0 || !stores[0].id) {
-            throw new Error('كود المتجر غير صحيح أو غير مسجل');
+            throw new Error('كود المتجر غير موجود أو لم تكتمل مزامنة الجهاز الجديد بعد');
           }
           resolvedStoreId = String(stores[0].id).trim();
           resolvedStoreName = stores[0].name || resolvedStoreName;
           resolvedStoreCode = String(stores[0].store_code || cleanCode).trim().toUpperCase();
 
-          const query = `/staff_users?store_id=eq.${encodeURIComponent(resolvedStoreId)}&username=eq.${encodeURIComponent(cleanUser)}&is_deleted=eq.false&limit=1`;
-          users = await this._publicAuthRequest(query);
+          users = await this._findStoreStaffFallback(resolvedStoreId, cleanUser);
+          if (!users || users.length === 0) {
+            const hasStaff = await this._hasAnySyncedStaffForStore(resolvedStoreId);
+            if (!hasStaff) {
+              throw new Error('كود المتجر غير موجود أو لم تكتمل مزامنة الجهاز الجديد بعد');
+            }
+            throw new Error('اسم المستخدم أو كلمة المرور غير صحيحة');
+          }
         }
       } else {
         // دخول من رابط QR يحتوي store_id صريح
@@ -609,13 +648,20 @@
         } catch (_) {}
 
         if (!users || users.length === 0) {
-          const query = `/staff_users?store_id=eq.${encodeURIComponent(cleanStoreId)}&username=eq.${encodeURIComponent(cleanUser)}&is_deleted=eq.false&limit=1`;
-          users = await this._publicAuthRequest(query);
+          users = await this._findStoreStaffFallback(cleanStoreId, cleanUser);
+          if (!users || users.length === 0) {
+            const st = await this.resolveStoreCodeById(cleanStoreId).catch(() => null);
+            const hasStaff = st && st.id ? await this._hasAnySyncedStaffForStore(cleanStoreId) : false;
+            if (!st || !st.id || !hasStaff) {
+              throw new Error('كود المتجر غير موجود أو لم تكتمل مزامنة الجهاز الجديد بعد');
+            }
+            throw new Error('اسم المستخدم أو كلمة المرور غير صحيحة');
+          }
         }
       }
 
       if (!users || users.length === 0) {
-        throw new Error('اسم المستخدم غير مسجل في هذا المتجر أو كود المتجر غير صحيح');
+        throw new Error('اسم المستخدم أو كلمة المرور غير صحيحة');
       }
 
       const user = users[0];
@@ -647,9 +693,15 @@
       }
 
       const cryptoLib = (typeof window !== 'undefined' && window.CryptoUtils) || (typeof globalThis !== 'undefined' && globalThis.CryptoUtils) || (typeof CryptoUtils !== 'undefined' && CryptoUtils);
-      const isMatch = await cryptoLib.verifyPassword(password, user.password_hash);
+      let isMatch = await cryptoLib.verifyPassword(effectivePassword, user.password_hash);
       if (!isMatch) {
-        throw new Error('كلمة المرور غير صحيحة');
+        const asciiDigitPwd = normalizeDigits(rawPassword);
+        if (asciiDigitPwd !== effectivePassword) {
+          isMatch = await cryptoLib.verifyPassword(asciiDigitPwd, user.password_hash);
+        }
+      }
+      if (!isMatch) {
+        throw new Error('اسم المستخدم أو كلمة المرور غير صحيحة');
       }
 
       // تصفير أي بقايا جلسة سابقة وتثبيت إعدادات المتجر الجديد حصراً
@@ -1432,6 +1484,7 @@
   clientInstance.getBusinessDateStr = getBusinessDateStr;
   clientInstance.getBusinessOffsetDateStr = getBusinessOffsetDateStr;
   clientInstance.getBusinessRangeUtc = getBusinessRangeUtc;
+  clientInstance.normalizeDigits = normalizeDigits;
 
   if (typeof window !== 'undefined') {
     window.SupabaseClient = clientInstance;
@@ -1448,6 +1501,7 @@
     window.getBusinessDateStr = getBusinessDateStr;
     window.getBusinessOffsetDateStr = getBusinessOffsetDateStr;
     window.getBusinessRangeUtc = getBusinessRangeUtc;
+    window.normalizeDigits = normalizeDigits;
   }
   if (typeof module !== 'undefined' && module.exports) {
     module.exports = clientInstance;
@@ -1466,5 +1520,6 @@
     module.exports.getBusinessOffsetDateStr = getBusinessOffsetDateStr;
     module.exports.businessMidnightToUtcDate = businessMidnightToUtcDate;
     module.exports.getBusinessRangeUtc = getBusinessRangeUtc;
+    module.exports.normalizeDigits = normalizeDigits;
   }
 })(typeof window !== 'undefined' ? window : globalThis);
