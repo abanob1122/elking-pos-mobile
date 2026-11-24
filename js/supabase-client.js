@@ -260,10 +260,18 @@
       type === 'توريد للخزينة' ||
       type === 'تغذية_وردية' ||
       type === 'تغذية وردية' ||
+      type === 'تحصيل_عميل' ||
+      type === 'تحصيل عميل' ||
+      type === 'تحويل_صادر' ||
+      type === 'تحويل_وارد' ||
+      String(log.source_type || '').trim() === 'channel_transfer' ||
+      String(log.source_type || '').trim() === 'credit_collection' ||
       combined.includes('توريد_للخزينة') ||
       combined.includes('توريد للخزينة') ||
       combined.includes('تغذية_وردية') ||
       combined.includes('تغذية وردية') ||
+      combined.includes('تحويل_صادر') ||
+      combined.includes('تحويل_وارد') ||
       type === 'إيداع' ||
       type === 'ايداع' ||
       type === 'وارد'
@@ -295,6 +303,34 @@
       type === 'تغذية وردية' ||
       combined.includes('تغذية_وردية') ||
       combined.includes('تغذية وردية')
+    );
+  }
+
+  function isChannelTransferOut(log) {
+    if (!log) return false;
+    const type = String(log.trans_type || log.type || '').trim();
+    const cat = String(log.category || '').trim();
+    return type === 'تحويل_صادر' || cat === 'تحويل_صادر';
+  }
+
+  function isChannelTransferIn(log) {
+    if (!log) return false;
+    const type = String(log.trans_type || log.type || '').trim();
+    const cat = String(log.category || '').trim();
+    return type === 'تحويل_وارد' || cat === 'تحويل_وارد';
+  }
+
+  function isCustomerCollection(log) {
+    if (!log) return false;
+    const type = String(log.trans_type || log.type || '').trim();
+    const cat = String(log.category || '').trim();
+    const src = String(log.source_type || '').trim();
+    return (
+      type === 'تحصيل_عميل' ||
+      type === 'تحصيل عميل' ||
+      cat === 'تحصيل_عميل' ||
+      cat === 'تحصيل عميل' ||
+      src === 'credit_collection'
     );
   }
 
@@ -919,7 +955,27 @@
           const openingCash = Number(sh.opening_cash ?? sh.starting_cash ?? 0);
           const cashReturns = Number(sh.cash_returns || 0);
           const expToDeduct = shExp > 0 ? shExp : totalExpenses;
-          const currentInShift = openingCash + shiftCashSales - cashReturns - expToDeduct;
+          let shiftCashCollections = 0;
+          let shiftCashTransfersDelta = 0;
+          try {
+            const logs = (treasuryRes.status === 'fulfilled' && treasuryRes.value) ? treasuryRes.value : [];
+            for (const l of logs) {
+              const lShift = Number(l.shift_id || 0);
+              const lTime = new Date(l.created_at).getTime();
+              const matches = (shLocalId > 0 && lShift === shLocalId) || (lTime >= shStart && lShift === 0);
+              if (!matches) continue;
+              if (categorizePayment(l.payment_method || 'نقدي') !== 'cash') continue;
+              const lAmt = Math.abs(Number(l.amount || 0));
+              if (isCustomerCollection(l)) {
+                shiftCashCollections += lAmt;
+              } else if (isChannelTransferIn(l)) {
+                shiftCashTransfersDelta += lAmt;
+              } else if (isChannelTransferOut(l)) {
+                shiftCashTransfersDelta -= lAmt;
+              }
+            }
+          } catch (_) {}
+          const currentInShift = openingCash + shiftCashSales + shiftCashCollections + shiftCashTransfersDelta - cashReturns - expToDeduct;
           openShiftDrawerCash += currentInShift;
         }
       } catch (_) {}
@@ -1477,6 +1533,9 @@
   clientInstance.getSaleCashAmount = getSaleCashAmount;
   clientInstance.isActualExpense = isActualExpense;
   clientInstance.isShiftFeed = isShiftFeed;
+  clientInstance.isChannelTransferOut = isChannelTransferOut;
+  clientInstance.isChannelTransferIn = isChannelTransferIn;
+  clientInstance.isCustomerCollection = isCustomerCollection;
   clientInstance.getCairoDateStr = getCairoDateStr;
   clientInstance.getCairoOffsetDateStr = getCairoOffsetDateStr;
   clientInstance.getCairoRangeUtc = getCairoRangeUtc;
@@ -1494,6 +1553,9 @@
     window.getSaleCashAmount = getSaleCashAmount;
     window.isActualExpense = isActualExpense;
     window.isShiftFeed = isShiftFeed;
+    window.isChannelTransferOut = isChannelTransferOut;
+    window.isChannelTransferIn = isChannelTransferIn;
+    window.isCustomerCollection = isCustomerCollection;
     window.getCairoDateStr = getCairoDateStr;
     window.getCairoOffsetDateStr = getCairoOffsetDateStr;
     window.getCairoRangeUtc = getCairoRangeUtc;
@@ -1512,6 +1574,9 @@
     module.exports.getSaleCashAmount = getSaleCashAmount;
     module.exports.isActualExpense = isActualExpense;
     module.exports.isShiftFeed = isShiftFeed;
+    module.exports.isChannelTransferOut = isChannelTransferOut;
+    module.exports.isChannelTransferIn = isChannelTransferIn;
+    module.exports.isCustomerCollection = isCustomerCollection;
     module.exports.getCairoDateStr = getCairoDateStr;
     module.exports.getCairoOffsetDateStr = getCairoOffsetDateStr;
     module.exports.getCairoRangeUtc = getCairoRangeUtc;

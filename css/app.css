@@ -5,6 +5,9 @@
 :root {
   --primary-color: #3b82f6;
   --gold-accent: #f59e0b;
+  --motion-fast: 150ms;
+  --motion-base: 220ms;
+  --motion-ease: cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 * {
@@ -94,12 +97,12 @@ input, textarea, select {
   max-width: 92vw;
 }
 
-/* Tab active transitions */
+/* Tab active transitions (GPU-only transform + opacity) */
 .tab-content {
   display: none;
   opacity: 0;
   transform: translateY(6px);
-  transition: opacity 0.2s ease, transform 0.2s ease;
+  transition: opacity var(--motion-base) var(--motion-ease), transform var(--motion-base) var(--motion-ease);
 }
 
 .tab-content.active {
@@ -158,10 +161,27 @@ html:not(.dark) #themeIconSun {
   animation: pulse-subtle 2s infinite ease-in-out;
 }
 
-/* Number formatting RTL fix */
+/* Number formatting RTL fix & Tabular Numeric Clarity */
+.num-ltr,
+input[type="number"] {
+  font-variant-numeric: tabular-nums;
+}
+
 .num-ltr {
   direction: ltr;
   display: inline-block;
+}
+
+@keyframes mobileLoginShake {
+  0%, 100% { transform: translateX(0); }
+  20% { transform: translateX(-6px); }
+  40% { transform: translateX(6px); }
+  60% { transform: translateX(-4px); }
+  80% { transform: translateX(4px); }
+}
+
+.is-login-shake {
+  animation: mobileLoginShake 240ms var(--motion-ease);
 }
 
 /* 60fps Install Prompt Card & Primary CTA Animations (transform / opacity only) */
@@ -200,4 +220,14 @@ html:not(.dark) #themeIconSun {
 
 .install-cta-btn:active {
   transform: scale(0.96);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }

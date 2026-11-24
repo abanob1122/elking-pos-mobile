@@ -24,6 +24,8 @@
     selectedBranchId: 'ALL',
   };
   let isRefreshing = false;
+  const TAB_CACHE_TTL_MS = 15000;
+  const tabCacheLoadedAt = new Map();
   let deferredInstallPrompt = (typeof window !== 'undefined' && window.__elkingDeferredInstallPrompt)
     ? window.__elkingDeferredInstallPrompt
     : null;
@@ -363,6 +365,7 @@
     state.shifts = [];
     state.treasury = [];
     state.selectedBranchId = 'ALL';
+    tabCacheLoadedAt.clear();
     branchesCache = [];
     salesCurrentPage = 0;
     lastSuccessfulSyncTime = null;
@@ -687,6 +690,11 @@
           hideLoginModal();
           await loadInitialAppData();
         } catch (err) {
+          const loginCard = el('loginModal')?.querySelector('.modal-content');
+          if (loginCard) {
+            loginCard.classList.remove('is-login-shake');
+            requestAnimationFrame(() => loginCard.classList.add('is-login-shake'));
+          }
           showToast(err.message || 'فشل تسجيل الدخول', true);
         } finally {
           if (submitBtn) {
@@ -1040,22 +1048,23 @@
     if (branchSelect) {
       branchSelect.addEventListener('change', () => {
         salesCurrentPage = 0;
+        tabCacheLoadedAt.clear();
         if (client) client.setActiveBranch(branchSelect.value);
-        refreshCurrentTab();
+        refreshCurrentTab(false, true);
       });
     }
 
     const refreshBtn = el('refreshBtn');
     if (refreshBtn) {
       refreshBtn.addEventListener('click', () => {
-        refreshCurrentTab(true);
+        refreshCurrentTab(true, true);
       });
     }
 
     const retryConnectionBtn = el('retryConnectionBtn');
     if (retryConnectionBtn) {
       retryConnectionBtn.addEventListener('click', () => {
-        refreshCurrentTab(true);
+        refreshCurrentTab(true, true);
       });
     }
   }
@@ -1085,12 +1094,22 @@
       activeSection.classList.add('active');
     }
 
-    refreshCurrentTab();
-    triggerIcons();
+    const branchId = client ? client.getActiveBranch() : 'ALL';
+    const cacheKey = `${tabId}:${branchId}`;
+    const lastAt = tabCacheLoadedAt.get(cacheKey) || 0;
+    if ((Date.now() - lastAt) >= TAB_CACHE_TTL_MS) {
+      refreshCurrentTab(false, true);
+    }
   }
 
-  async function refreshCurrentTab(showToastOnDone = false) {
+  async function refreshCurrentTab(showToastOnDone = false, force = false) {
     if (isRefreshing) return;
+    const branchId = client ? client.getActiveBranch() : 'ALL';
+    const cacheKey = `${currentTab}:${branchId}`;
+    if (!force && !showToastOnDone) {
+      const lastAt = tabCacheLoadedAt.get(cacheKey) || 0;
+      if ((Date.now() - lastAt) < TAB_CACHE_TTL_MS) return;
+    }
     isRefreshing = true;
 
     const refreshIcon = el('refreshIcon');
@@ -1099,7 +1118,6 @@
     }
 
     try {
-      const branchId = client ? client.getActiveBranch() : 'ALL';
       switch (currentTab) {
         case 'dashboard':
           await renderDashboard(branchId);
@@ -1117,6 +1135,7 @@
           await renderStaff();
           break;
       }
+      tabCacheLoadedAt.set(cacheKey, Date.now());
       updateConnectionBanner(false);
       if (showToastOnDone) {
         showToast('تم تحديث البيانات لحظياً');
@@ -1300,13 +1319,27 @@
 
     listEl.innerHTML = sales.map(s => {
       const total = getSaleAmount(s);
-      const method = s.payment_method || 'نقدي';
+      let parsedSplit = null;
+      if (s.split_details) {
+        if (typeof s.split_details === 'object') {
+          parsedSplit = s.split_details;
+        } else if (typeof s.split_details === 'string' && s.split_details.trim()) {
+          try { parsedSplit = JSON.parse(s.split_details); } catch (_) { parsedSplit = null; }
+        }
+      }
+      const hasSplit = parsedSplit && Object.keys(parsedSplit).length > 0;
+      const method = hasSplit ? 'دفع متعدد' : (s.payment_method || 'نقدي');
+      const custName = s.customer_name || s.client || 'عميل نقدي';
       const excluded = isSaleExcluded(s);
       let methodBadge = 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400';
-      if (method.toLowerCase().includes('card') || method.includes('فيزا')) {
+      if (hasSplit || method.includes('متعدد') || method.includes('مقسم')) {
+        methodBadge = 'bg-amber-500/10 text-amber-600 dark:text-amber-400';
+      } else if (method.toLowerCase().includes('card') || method.includes('فيزا')) {
         methodBadge = 'bg-purple-500/10 text-purple-600 dark:text-purple-400';
       } else if (method.toLowerCase().includes('insta') || method.includes('انستا')) {
         methodBadge = 'bg-cyan-500/10 text-cyan-600 dark:text-cyan-400';
+      } else if (method.includes('آجل') || method.toLowerCase().includes('credit')) {
+        methodBadge = 'bg-rose-500/10 text-rose-600 dark:text-rose-400';
       }
 
       const rawId = String(s.id || '');
@@ -1324,7 +1357,7 @@
           </div>
 
           <div class="flex items-center justify-between gap-2 mt-2 pt-2 border-t border-slate-100 dark:border-slate-800/80 text-xs text-slate-400">
-            <span class="truncate min-w-0">الكاشير: <strong class="text-slate-700 dark:text-slate-300">${escapeHtml(s.cashier_username || s.cashier_name || 'كاشير')}</strong></span>
+            <span class="truncate min-w-0">العميل: <strong class="text-slate-700 dark:text-slate-300">${escapeHtml(custName)}</strong> • الكاشير: <strong class="text-slate-700 dark:text-slate-300">${escapeHtml(s.cashier_username || s.cashier_name || 'كاشير')}</strong></span>
             <span class="shrink-0">${escapeHtml(formatDateTime(s.sale_date || s.created_at))}</span>
           </div>
         </div>
@@ -1351,8 +1384,26 @@
     setEl('modalInvoiceNo', `#${sale.invoice_no || String(sale.id || '').substring(0, 8)}`);
     setEl('modalInvoiceDate', formatDateTime(sale.sale_date || sale.created_at));
     setEl('modalCashierName', sale.cashier_username || sale.cashier_name || 'كاشير');
-    setEl('modalCustomerName', sale.customer_name || 'عميل نقدي');
-    setEl('modalPaymentMethod', sale.payment_method || 'نقدي (كاش)');
+    setEl('modalCustomerName', sale.customer_name || sale.client || 'عميل نقدي');
+    let splitObj = null;
+    if (sale.split_details) {
+      if (typeof sale.split_details === 'object') {
+        splitObj = sale.split_details;
+      } else if (typeof sale.split_details === 'string' && sale.split_details.trim()) {
+        try { splitObj = JSON.parse(sale.split_details); } catch (_) { splitObj = null; }
+      }
+    }
+    let pmDisplay = sale.payment_method || 'نقدي (كاش)';
+    if (splitObj && Object.keys(splitObj).length > 0) {
+      const splitLabelMap = { cash: 'كاش', card: 'فيزا', instapay: 'إنستاباي', wallet: 'محفظة', credit: 'آجل' };
+      const parts = Object.entries(splitObj)
+        .filter(([, amt]) => Number(amt || 0) > 0)
+        .map(([k, amt]) => `${splitLabelMap[String(k).toLowerCase()] || k}: ${formatMoney(amt)}`);
+      if (parts.length > 0) {
+        pmDisplay = `دفع متعدد (${parts.join(' + ')})`;
+      }
+    }
+    setEl('modalPaymentMethod', pmDisplay);
     setEl('modalBranchName', getBranchName(sale.branch_id));
 
     const total = getSaleAmount(sale);
@@ -1528,7 +1579,16 @@
     listEl.innerHTML = logs.map(l => {
       const shiftFeed = isShiftFeed(l);
       const actualExpense = isActualExpense(l);
-      const isOutflow = actualExpense || shiftFeed;
+      const transferOut = typeof window.isChannelTransferOut === 'function'
+        ? window.isChannelTransferOut(l)
+        : (String(l.trans_type || l.type || '').trim() === 'تحويل_صادر');
+      const transferIn = typeof window.isChannelTransferIn === 'function'
+        ? window.isChannelTransferIn(l)
+        : (String(l.trans_type || l.type || '').trim() === 'تحويل_وارد');
+      const custColl = typeof window.isCustomerCollection === 'function'
+        ? window.isCustomerCollection(l)
+        : (String(l.trans_type || l.type || '').trim() === 'تحصيل_عميل');
+      const isOutflow = actualExpense || shiftFeed || transferOut;
       const amount = Math.abs(Number(l.amount || 0));
 
       let defaultTitle = 'توريد للخزينة';
@@ -1536,7 +1596,22 @@
       let colorClasses = 'bg-emerald-500/10 text-emerald-500';
       let amountColor = 'text-emerald-600 dark:text-emerald-400';
 
-      if (shiftFeed) {
+      if (transferOut) {
+        defaultTitle = 'تحويل / تسييل صادر بين القنوات';
+        badgeLabel = 'تحويل صادر';
+        colorClasses = 'bg-amber-500/10 text-amber-500';
+        amountColor = 'text-amber-600 dark:text-amber-400';
+      } else if (transferIn) {
+        defaultTitle = 'تحويل / تسييل وارد بين القنوات';
+        badgeLabel = 'تحويل وارد';
+        colorClasses = 'bg-blue-500/10 text-blue-500';
+        amountColor = 'text-blue-600 dark:text-blue-400';
+      } else if (custColl) {
+        defaultTitle = 'تحصيل مديونية عميل';
+        badgeLabel = 'تحصيل مديونية';
+        colorClasses = 'bg-emerald-500/10 text-emerald-500';
+        amountColor = 'text-emerald-600 dark:text-emerald-400';
+      } else if (shiftFeed) {
         defaultTitle = 'تغذية وردية (صادر من الخزينة)';
         badgeLabel = 'صادر - تغذية وردية';
         colorClasses = 'bg-amber-500/10 text-amber-500';
@@ -1641,21 +1716,44 @@
         cashSales = Math.max(cashSales, realTimeCash);
 
         // حساب مصروفات الوردية الفعلية فقط (استبعاد توريد_للخزينة وتغذية_وردية) إن لم تكن مسجلة بالسحابة
-        if (expenses <= 0 && todayLogs && todayLogs.length > 0) {
+        let shiftCashCollections = 0;
+        let shiftCashTransfersDelta = 0;
+        if (todayLogs && todayLogs.length > 0) {
           for (const exp of todayLogs) {
-            if (!isActualExpense(exp)) continue;
             const expTime = new Date(exp.created_at).getTime();
             const expShift = Number(exp.shift_id || 0);
-            if ((sLocalId > 0 && expShift === sLocalId) || (expTime >= sStart)) {
-              expenses += Math.abs(Number(exp.amount || 0));
+            const matchesShift = (sLocalId > 0 && expShift === sLocalId) || (expTime >= sStart && expShift === 0);
+            if (!matchesShift) continue;
+            const expAmt = Math.abs(Number(exp.amount || 0));
+            if (expenses <= 0 && isActualExpense(exp)) {
+              expenses += expAmt;
+            }
+            const pmCat = typeof window.categorizePayment === 'function'
+              ? window.categorizePayment(exp.payment_method || 'نقدي')
+              : 'cash';
+            if (pmCat === 'cash') {
+              const isColl = typeof window.isCustomerCollection === 'function'
+                ? window.isCustomerCollection(exp)
+                : (String(exp.trans_type || '').trim() === 'تحصيل_عميل');
+              const isTrIn = typeof window.isChannelTransferIn === 'function'
+                ? window.isChannelTransferIn(exp)
+                : (String(exp.trans_type || '').trim() === 'تحويل_وارد');
+              const isTrOut = typeof window.isChannelTransferOut === 'function'
+                ? window.isChannelTransferOut(exp)
+                : (String(exp.trans_type || '').trim() === 'تحويل_صادر');
+              if (isColl) shiftCashCollections += expAmt;
+              else if (isTrIn) shiftCashTransfersDelta += expAmt;
+              else if (isTrOut) shiftCashTransfersDelta -= expAmt;
             }
           }
         }
+        s._shiftCashCollections = shiftCashCollections;
+        s._shiftCashTransfersDelta = shiftCashTransfersDelta;
       }
 
       const drawerCashLabel = isOpen ? 'المتوقع بالدرج:' : 'الفعلي بالدرج:';
       const drawerCashVal = isOpen
-        ? (openingCash + cashSales - cashReturns - expenses)
+        ? (openingCash + cashSales + Number(s._shiftCashCollections || 0) + Number(s._shiftCashTransfersDelta || 0) - cashReturns - expenses)
         : Number(s.actual_cash ?? s.closing_cash ?? 0);
       const variance = Number(s.handover_variance ?? 0);
 
@@ -2124,6 +2222,7 @@
       _realtimeDebounceTimer = setTimeout(() => {
         const tables = new Set(_realtimePendingTables);
         _realtimePendingTables.clear();
+        tabCacheLoadedAt.clear();
 
         if (tables.has('staff_users')) {
           _checkCurrentUserStatus();
@@ -2138,7 +2237,7 @@
           (tab === 'staff' && tables.has('staff_users'));
 
         if (shouldRefreshTab) {
-          refreshCurrentTab();
+          refreshCurrentTab(false, true);
         }
       }, 500);
     });
@@ -2150,7 +2249,7 @@
         const nowMs = Date.now();
         if (nowMs - lastVisibilityRefreshAt >= 2000) {
           lastVisibilityRefreshAt = nowMs;
-          refreshCurrentTab();
+          refreshCurrentTab(false, true);
         }
       }
     });
